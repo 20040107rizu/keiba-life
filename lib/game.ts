@@ -52,8 +52,27 @@ export type Horse = {
   /** ケガ明け（復帰後の初戦まで、または3週間） */
   recovery?: boolean;
   rehab?: number;
+  /** 血統（父・母、それぞれ最大3代前まで） */
+  pedigree?: Pedigree;
+  /** 生まれた時点（time）。配合で生まれた馬のみ */
+  born?: number;
+  /** 育成牧場にいる間の終了時点（time）。設定中はレースに出られない */
+  foalUntil?: number;
+  /** 体質（ケガのしやすさの倍率。インブリードで上がることがある。未設定は1） */
+  frailty?: number;
+  /** インブリードの表記（例：「ロードオブグラス 3×3（25%）」） */
+  inbreed?: string;
 };
-export type Entry = { number: number; frame: number; horse: Horse; strength: number; owned: boolean };
+/** 血統表の1頭分。sire=父、dam=母 */
+export type PedigreeNode = { id: string; name: string; sire?: PedigreeNode; dam?: PedigreeNode };
+export type Pedigree = { sire: PedigreeNode; dam: PedigreeNode };
+/** 受胎中の繁殖牝馬。foal は種付け時に決まり、dueTime に誕生する */
+export type Pregnancy = { id: string; damId: string; sireId: string; sireName: string; damName: string; matedAt: number; dueTime: number; foal: Horse };
+export type Entry = {
+  number: number; frame: number; horse: Horse; strength: number; owned: boolean;
+  /** リーグの友だちの馬のとき：持ち主のユーザーIDとニックネーム */
+  ownerId?: string; owner?: string;
+};
 export type Ticket = { type: number; numbers: number[]; stake: number };
 export type Card = { registered: string | null; entries: Entry[]; tickets: Ticket[] };
 export type Result = {
@@ -72,6 +91,8 @@ export type Result = {
 export type Game = {
   time: number; points: number; horses: Horse[]; plans: Record<string, number[]>; cards: Record<string, Card>;
   history: Result[]; silks: Silks; spent: number; returned: number; prize: number; report: string[]; market: Horse[];
+  /** 受胎中の繁殖牝馬（配合） */
+  pregnancies: Pregnancy[];
 };
 
 // ───────── 馬の生成 ─────────
@@ -119,7 +140,7 @@ export function initialGame(): Game {
   return {
     time: 1, points: 10000, horses, plans: {}, cards: {}, history: [],
     silks: { pattern: 1, body: '#1F6B3A', sleeve: '#C9A24B', cap: '#1F6B3A' },
-    spent: 0, returned: 0, prize: 0, report: [], market: makeMarket(1),
+    spent: 0, returned: 0, prize: 0, report: [], market: makeMarket(1), pregnancies: [],
   };
 }
 
@@ -130,8 +151,12 @@ export const raceKey = (time: number, race: Race) => year(time) + '-' + race.wee
 export const available = (game: Game) => races.filter(r => r.week >= week(game.time) && !game.history.some(v => v.key === raceKey(game.time, r)));
 export const nextRace = (game: Game) => available(game)[0];
 
+/** 厩舎の頭数（現役馬と育成中の仔馬。引退馬・繁殖馬は数えない） */
+export const activeCount = (game: Game) => game.horses.filter(h => !h.retired).length;
+export const isFoal = (h: Horse) => h.foalUntil !== undefined;
+
 export function eligible(horse: Horse, race: Race) {
-  if (horse.retired || horse.injury || horse.fatigue >= 90 || (race.age && race.age !== horse.age)) return false;
+  if (isFoal(horse) || horse.retired || horse.injury || horse.fatigue >= 90 || (race.age && race.age !== horse.age)) return false;
   if (race.level === 8 && race.age === 3) return horse.wins > 0;
   return race.level <= 1 ? horse.level === race.level : horse.level === race.level || (horse.level >= 5 && race.level >= 5 && race.level <= horse.level);
 }
@@ -172,6 +197,17 @@ function rollInjury(fatigue: number, random: Random): { name: string; weeks: num
 }
 
 type WeekLog = { injury?: string };
+
+/** 育成牧場での1週：疲労・ケガなしで、成長限界の約6割に向けて少しずつ伸びる */
+const NURSERY_TARGET = 0.6;
+const NURSERY_RATE = 0.08;
+function nurseryWeek(h: Horse, random: Random): Horse {
+  const values = h.values.map((v, i) => {
+    const target = h.potential[i] * NURSERY_TARGET;
+    return clamp(Math.floor(v + Math.max(0, target - v) * NURSERY_RATE * (0.8 + random() * 0.4) + random()), 0, STAT_MAX);
+  });
+  return { ...h, values, fatigue: 0, form: 2 };
+}
 function trainWeek(h: Horse, sequence: number[], raceWeek: boolean, random: Random): { horse: Horse; log: WeekLog } {
   const log: WeekLog = {};
   if (h.injury) {
@@ -193,7 +229,7 @@ function trainWeek(h: Horse, sequence: number[], raceWeek: boolean, random: Rand
     m.gain.forEach((g, i) => {
       if (g) gains[i] += g * rate * tired * luck * headroom(h.values[i] + gains[i], h.potential[i]);
     });
-    if (m.risk > 0 && random() < m.risk * injuryFactor(fatigue, h.age)) {
+    if (m.risk > 0 && random() < m.risk * injuryFactor(fatigue, h.age) * (h.frailty ?? 1)) {
       const hurt = rollInjury(fatigue, random);
       injury = hurt.weeks;
       injuryName = hurt.name;
@@ -223,6 +259,7 @@ function trainWeek(h: Horse, sequence: number[], raceWeek: boolean, random: Rand
 export function advance(game: Game, count: number, planHorse: string, random: Random = Math.random) {
   let time = game.time;
   let horses = game.horses;
+  let pregnancies = game.pregnancies ?? [];
   const before = horses;
   const events = new Map<string, string[]>();
   for (let i = 0; i < count; i++) {
@@ -231,16 +268,28 @@ export function advance(game: Game, count: number, planHorse: string, random: Ra
     horses = horses.map(h => {
       const age = h.age + (week(time) === 1 ? 1 : 0);
       if (h.retired || age >= RETIRE_AGE) return { ...h, age, retired: true };
+      if (h.foalUntil !== undefined) {
+        const grown = nurseryWeek({ ...h, age }, random);
+        if (time < h.foalUntil) return grown;
+        events.set(h.id, [...(events.get(h.id) ?? []), '育成を終えて入厩（デビュー可能）']);
+        return { ...grown, foalUntil: undefined };
+      }
       const sequence = i === 0 || h.id === planHorse ? game.plans[h.id] ?? defaultPlan : Array(7).fill(5);
       const { horse, log } = trainWeek({ ...h, age }, sequence, raceWeek, random);
       if (log.injury) events.set(h.id, [...(events.get(h.id) ?? []), 'ケガ：' + log.injury]);
       return horse;
     });
+    // 出産：予定週を迎えた仔馬が生まれ、育成牧場に入る
+    for (const p of pregnancies.filter(v => v.dueTime <= time)) {
+      horses = [...horses, { ...p.foal, born: time }];
+      events.set(p.foal.id, ['誕生！ 父' + p.sireName + '・母' + p.damName]);
+    }
+    pregnancies = pregnancies.filter(v => v.dueTime > time);
   }
   const report = horses.filter((h, i) => !before[i]?.retired).map(h => {
     const old = before.find(v => v.id === h.id) ?? h;
     const gains = h.values.map((value, i) => (value !== old.values[i] ? stats[i] + (value > old.values[i] ? ' +' : ' ') + (value - old.values[i]) : '')).filter(Boolean).join('・');
-    const status = h.retired ? '引退' : forms[h.form] + '・疲労 ' + h.fatigue + '%';
+    const status = h.retired ? '引退' : h.foalUntil !== undefined ? '育成中' : forms[h.form] + '・疲労 ' + h.fatigue + '%';
     const injury = h.injury ? '休養 残り' + h.injury + '週' + (h.injuryName ? '（' + h.injuryName + '）' : '') : h.recovery ? 'ケガ明け' : '';
     return h.name + '｜' + [gains, status, injury, ...(events.get(h.id) ?? [])].filter(Boolean).join(' / ');
   });
@@ -248,7 +297,7 @@ export function advance(game: Game, count: number, planHorse: string, random: Ra
     const race = races.find(r => raceKey(game.time, r) === key);
     return (race && year(time) === year(game.time) && race.week >= week(time)) || card.tickets.length > 0;
   }));
-  return { ...game, time, horses, cards, report, market: makeMarket(time) };
+  return { ...game, time, horses, cards, report, market: makeMarket(time), pregnancies };
 }
 
 // ───────── 出馬表 ─────────
@@ -285,6 +334,8 @@ export function cardFor(game: Game, race: Race): Card {
 // ───────── レース開催 ─────────
 const prizeTable = [450, 550, 780, 1000, 1450, 2000, 3800, 6500, 12500];
 const prizeShare = [1, 0.4, 0.25, 0.15, 0.1];
+/** クラスと着順（0始まり）から本賞金。5着より下は0 */
+export const prizeFor = (level: number, rank: number) => (rank < prizeShare.length ? Math.round((prizeTable[level] ?? 0) * prizeShare[rank]) : 0);
 const KEEP_TIMELINE = 30;
 
 export function runRace(game: Game, race: Race, card: Card, random: Random = Math.random): { game: Game; result: Result } {
@@ -321,7 +372,7 @@ export function runRace(game: Game, race: Race, card: Card, random: Random = Mat
       form: clamp(h.form + formMove, 0, 4),
       recovery: false,
     };
-    if (random() < 0.002 * injuryFactor(fatigue, h.age)) {
+    if (random() < 0.002 * injuryFactor(fatigue, h.age) * (h.frailty ?? 1)) {
       const hurt = rollInjury(fatigue, random);
       updated = { ...updated, injury: hurt.weeks, injuryName: hurt.name };
       const line = h.name + '｜レース後に' + hurt.name + '（全治' + hurt.weeks + '週）';
