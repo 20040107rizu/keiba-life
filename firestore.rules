@@ -1,0 +1,100 @@
+rules_version = '2';
+// 競馬ライフ：Cloud Firestore のセキュリティルール
+// - 自分のデータ（users / saves）は本人だけが読み書きできる
+// - リーグの中身はメンバーだけが読める。書けるのは自分の分だけ
+// - 招待コードは1件ずつなら誰でも（ログイン済みなら）引けるが、一覧はとれない
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function isMe(uid) { return signedIn() && request.auth.uid == uid; }
+    function isMember(leagueId) {
+      return signedIn() && exists(/databases/$(database)/documents/leagues/$(leagueId)/members/$(request.auth.uid));
+    }
+    function nickname(n) { return n is string && n.size() >= 1 && n.size() <= 20; }
+    function data() { return request.resource.data; }
+
+    match /users/{uid} {
+      allow read, delete: if isMe(uid);
+      allow create, update: if isMe(uid)
+        && data().keys().hasOnly(['nickname', 'leagueId', 'updatedAt'])
+        && nickname(data().nickname)
+        && (data().leagueId == null || data().leagueId is string);
+    }
+
+    match /saves/{uid} {
+      allow read, delete: if isMe(uid);
+      allow create, update: if isMe(uid)
+        && data().keys().hasOnly(['data', 'savedAt'])
+        && data().data is string && data().data.size() < 1000000
+        && data().savedAt is string;
+    }
+
+    match /invites/{code} {
+      allow get: if signedIn();
+      allow list, update, delete: if false;
+      // リーグ作成と同じ書き込みでのみ作れる（作成者本人のリーグ）
+      allow create: if signedIn()
+        && data().keys().hasOnly(['leagueId'])
+        && getAfter(/databases/$(database)/documents/leagues/$(data().leagueId)).data.owner == request.auth.uid
+        && getAfter(/databases/$(database)/documents/leagues/$(data().leagueId)).data.inviteCode == code;
+    }
+
+    match /leagues/{leagueId} {
+      allow get: if isMember(leagueId);
+      allow list, update, delete: if false;
+      allow create: if signedIn()
+        && data().keys().hasOnly(['name', 'inviteCode', 'owner', 'createdAt'])
+        && data().owner == request.auth.uid
+        && data().name is string && data().name.size() >= 1 && data().name.size() <= 30
+        && data().inviteCode is string
+        && getAfter(/databases/$(database)/documents/invites/$(data().inviteCode)).data.leagueId == leagueId;
+
+      // 参加：正しい招待コードを持っている本人だけ
+      match /members/{uid} {
+        allow read: if isMember(leagueId);
+        allow create: if isMe(uid)
+          && data().keys().hasOnly(['nickname', 'code', 'joinedAt'])
+          && nickname(data().nickname)
+          && data().code is string
+          && getAfter(/databases/$(database)/documents/invites/$(data().code)).data.leagueId == leagueId;
+        allow update: if isMe(uid) && nickname(data().nickname) && data().code == resource.data.code;
+        allow delete: if isMe(uid);
+      }
+
+      // 厩舎の最新データ（友だちのレースに出走する馬・ランキング）
+      match /stables/{uid} {
+        allow read: if isMember(leagueId);
+        allow create, update: if isMe(uid) && isMember(leagueId)
+          && data().horses is string && data().horses.size() < 500000
+          && nickname(data().nickname);
+        allow delete: if isMe(uid);
+      }
+
+      // 共有するレース結果・馬券（あとから書き換え不可）
+      match /results/{resultId} {
+        allow read: if isMember(leagueId);
+        allow create: if isMember(leagueId)
+          && data().userId == request.auth.uid
+          && data().createdAt is number;
+        allow update, delete: if false;
+      }
+
+      // 友だちの馬が獲った賞金。送るのはレースを開催した人、受け取る（claimed=true にする）のは持ち主
+      match /prizes/{prizeId} {
+        allow read: if signedIn() && (resource.data.toUser == request.auth.uid || resource.data.fromUser == request.auth.uid);
+        allow create: if isMember(leagueId)
+          && data().fromUser == request.auth.uid
+          && data().toUser is string && data().toUser != request.auth.uid
+          && exists(/databases/$(database)/documents/leagues/$(leagueId)/members/$(data().toUser))
+          && data().prize is int && data().prize > 0 && data().prize <= 20000
+          && data().claimed == false;
+        allow update: if signedIn()
+          && resource.data.toUser == request.auth.uid
+          && resource.data.claimed == false
+          && data().claimed == true
+          && data().diff(resource.data).affectedKeys().hasOnly(['claimed']);
+        allow delete: if false;
+      }
+    }
+  }
+}

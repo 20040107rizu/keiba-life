@@ -1,10 +1,10 @@
 // lib/storage.ts
 // セーブ処理：バージョン付きで保存し、古いデータは順番に移行する。
 // 保存先は GameStorage の実装を差し替えるだけで変えられる（将来は Supabase 版を作って setGameStorage）。
-import { initialGame, makeMarket, strength, type Card, type Entry, type Game, type Horse, type Result } from './game';
+import { initialGame, makeMarket, strength, type Card, type Entry, type Game, type Horse, type PedigreeNode, type Pregnancy, type Result } from './game';
 import { races } from './races';
 
-export const SAVE_VERSION = 2;
+export const SAVE_VERSION = 3;
 export type SaveData = { version: number; savedAt: string; game: Game };
 
 export interface GameStorage {
@@ -47,7 +47,19 @@ function v1ToV2(data: Data): Data {
 /** キー＝移行元のバージョン。新しい形式を追加したらここに1つ足す */
 const migrations: Record<number, (data: Data) => Data> = {
   1: v1ToV2,
+  /** v2 → v3：配合（血統・仔馬・受胎）を追加。新しい項目はすべて省略可能なので、受胎リストだけ用意する */
+  2: data => ({ ...data, pregnancies: list(data.pregnancies) }),
 };
+
+function sanitizeNode(raw: unknown, depth = 0): PedigreeNode | undefined {
+  if (!isObject(raw) || depth > 4) return undefined;
+  const result: PedigreeNode = { id: str(raw.id, 'unknown'), name: str(raw.name, '不明') };
+  const sire = sanitizeNode(raw.sire, depth + 1);
+  const dam = sanitizeNode(raw.dam, depth + 1);
+  if (sire) result.sire = sire;
+  if (dam) result.dam = dam;
+  return result;
+}
 
 function sanitizeHorse(raw: unknown, index: number): Horse | null {
   if (!isObject(raw)) return null;
@@ -77,6 +89,32 @@ function sanitizeHorse(raw: unknown, index: number): Horse | null {
     retired: raw.retired === true ? true : undefined,
     recovery: raw.recovery === true ? true : undefined,
     rehab: typeof raw.rehab === 'number' ? raw.rehab : undefined,
+    ...optionalBreeding(raw),
+  };
+}
+
+function optionalBreeding(raw: Data): Partial<Horse> {
+  const out: Partial<Horse> = {};
+  if (isObject(raw.pedigree)) {
+    const sire = sanitizeNode(raw.pedigree.sire);
+    const dam = sanitizeNode(raw.pedigree.dam);
+    if (sire && dam) out.pedigree = { sire, dam };
+  }
+  if (typeof raw.born === 'number') out.born = raw.born;
+  if (typeof raw.foalUntil === 'number') out.foalUntil = raw.foalUntil;
+  if (typeof raw.frailty === 'number' && Number.isFinite(raw.frailty)) out.frailty = Math.max(0.5, Math.min(3, raw.frailty));
+  if (typeof raw.inbreed === 'string') out.inbreed = raw.inbreed;
+  return out;
+}
+
+function sanitizePregnancy(raw: unknown, index: number): Pregnancy | null {
+  if (!isObject(raw)) return null;
+  const foal = sanitizeHorse(raw.foal, index);
+  if (!foal) return null;
+  return {
+    id: str(raw.id, 'preg-' + index), damId: str(raw.damId, ''), sireId: str(raw.sireId, ''),
+    sireName: str(raw.sireName, '不明'), damName: str(raw.damName, '不明'),
+    matedAt: num(raw.matedAt, 1), dueTime: num(raw.dueTime, 1), foal,
   };
 }
 
@@ -86,7 +124,10 @@ function sanitizeEntry(raw: unknown, index: number, raceTitle: string): Entry | 
   if (!horse) return null;
   const race = races.find(r => r.title === raceTitle);
   const number = num(raw.number, index + 1);
-  return { number, frame: num(raw.frame, number), horse, strength: num(raw.strength, race ? strength(horse, race) : 600), owned: raw.owned === true };
+  const entry: Entry = { number, frame: num(raw.frame, number), horse, strength: num(raw.strength, race ? strength(horse, race) : 600), owned: raw.owned === true };
+  if (typeof raw.ownerId === 'string') entry.ownerId = raw.ownerId;
+  if (typeof raw.owner === 'string') entry.owner = raw.owner;
+  return entry;
 }
 
 function sanitizeResult(raw: unknown): Result | null {
@@ -146,6 +187,7 @@ function sanitizeGame(data: Data): Game {
     prize: num(data.prize, 0),
     report: list(data.report).map(r => str(r, '')),
     market: market.length ? market : makeMarket(time),
+    pregnancies: list(data.pregnancies).map(sanitizePregnancy).filter((p): p is Pregnancy => !!p),
   };
 }
 
