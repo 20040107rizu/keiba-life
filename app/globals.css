@@ -1,0 +1,154 @@
+@import "tailwindcss";
+:root{--green:#1f6b3a;--deep:#103e29;--navy:#0b1f33;--gold:#c9a24b;--amber:#ffb000;--line:#dfe6dc;--muted:#58685f}
+*{box-sizing:border-box}
+body{margin:0;background:#f2f5ef;color:var(--navy);font-family:"Noto Sans JP","Hiragino Kaku Gothic ProN",Meiryo,sans-serif;font-size:14px}
+button,select{font:inherit}
+button{cursor:pointer}
+button:disabled{opacity:.5;cursor:default}
+button:focus-visible,select:focus-visible{outline:2px solid #ac7d25;outline-offset:3px}
+h1,h2,h3,p{margin:0}
+h1,h2,h3{font-weight:800;line-height:1.4}
+h1{font-size:24px}h2{font-size:18px}h3{font-size:17px}
+small{font-size:12px}
+.shell{min-height:100dvh;padding-bottom:calc(92px + env(safe-area-inset-bottom));}
+.top{background:#103e29;border-bottom:3px solid #c9a24b;color:white;padding:env(safe-area-inset-top) 0 0}
+.top-inner{max-width:720px;margin:auto;display:flex;align-items:center;gap:12px;padding:15px 22px;min-height:74px}
+.crest,.icon-button{height:41px;width:41px;display:grid;place-items:center;flex:none}
+.crest{border:1px solid #dec37d;border-radius:9px;background:#23543a;color:#f5d887;font-size:27px}
+.brand{line-height:1.2;font-size:19px;font-weight:850;letter-spacing:.04em}
+.brand small{font-family:Arial,sans-serif;font-size:9px;color:#d2c99d;letter-spacing:.21em;display:block;margin-top:5px}
+.points,.board{background:radial-gradient(circle,#24241b 0.65px,transparent .85px) 0 0/4px 4px,#090d0a;color:#ffbf36;font-family:ui-monospace,monospace;font-variant-numeric:tabular-nums;border-radius:8px}
+.points{margin-left:auto;min-width:114px;padding:5px 11px 6px;text-align:right;border:1px solid #8f753f}
+.points small{display:block;color:#f1e4bd;font:700 9px/1.3 sans-serif;letter-spacing:.08em}
+.points strong{font-size:24px;line-height:1;text-shadow:0 0 8px #ffae4550}
+.points strong span{font-size:12px}
+.content{max-width:720px;margin:0 auto;padding:21px 22px 8px;display:grid;gap:15px}
+.hero{isolation:isolate;position:relative;overflow:hidden;border-radius:10px;min-height:235px;color:white;background:#18432c url('/hero.webp') center 54%/cover no-repeat;border:1px solid #2b5b3e;box-shadow:0 4px 14px #142a231c}
+.hero:before{position:absolute;z-index:-1;inset:0;content:"";background:linear-gradient(90deg,#092d20fa,#0b352ad9 27%,#10332670 61%,#0a2b200d),linear-gradient(0deg,#0a281b70,transparent 48%)}
+.hero-copy{padding:25px 23px}
+.hero-kicker{display:flex;align-items:center;gap:7px;font:800 11px Arial,sans-serif;letter-spacing:.16em;color:#ffe19a}
+.hero-kicker span{font:700 10px sans-serif;letter-spacing:.04em;color:#f3f6ec;background:#123b2bb0;border:1px solid #ffffff3b;border-radius:20px;padding:4px 7px}
+.hero h1{font-size:clamp(25px,5.7vw,37px);margin:17px 0 8px;letter-spacing:.03em;text-shadow:0 2px 10px #10261e}
+.hero-meta,.hero-bottom,.actions,.race-meta,.condition>span,.section-head,.section-head>div,.section-head button,.schedule-title,.stepper,.result-row,.grade{display:flex;align-items:center;gap:8px}
+.hero-meta{font-size:13px;color:#f0f5ee;font-weight:700}
+.hero-bottom{margin-top:23px;gap:15px}
+.hero-bottom>span{font-weight:800;font-size:13px}
+.hero-bottom button{background:#f6e8b8;color:#223d2f;border-radius:6px;padding:8px 11px;display:flex;align-items:center;gap:6px;font-weight:800;font-size:12px}
+.grade{display:inline-flex;white-space:nowrap;background:#e3eddf;color:#1b5536;border-radius:5px;padding:3px 8px;font-size:11px;font-weight:850}
+.grade.gold,.gold-button{background:#d2ac52;color:#1c271e}
+.section-head{justify-content:space-between;margin:4px 0 10px}
+.section-head>div>svg,.section-head button,.green{color:var(--green)}
+.section-head h2{font-size:20px}
+.count{white-space:nowrap;border-radius:20px;padding:4px 8px;background:#e3eae0;color:#48604e;font-size:11px;font-weight:800}
+.section-head button{font-size:12px;font-weight:800}
+.horse-list{display:grid;gap:8px}
+.card,.horse-row,.quick button{background:white;border:1px solid var(--line);border-radius:8px;box-shadow:0 2px 4px #143b2008}
+.card{padding:15px;display:grid;gap:10px;min-width:0}
+.card h2{display:flex;align-items:center;gap:6px}
+.card h2 svg{color:var(--green)}
+.horse-row{width:100%;display:grid;grid-template-columns:76px minmax(0,1.2fr) minmax(83px,.85fr) 12px;align-items:center;gap:10px;padding:7px;text-align:left;min-height:81px}
+.horse-photo{background:#526b42 url('/horse-0.webp') center/cover no-repeat;border-radius:6px;height:66px}
+.horse-photo-1{background-image:url('/horse-1.webp')}
+.horse-photo-2{background-image:url('/horse-2.webp')}
+.horse-info{min-width:0;display:grid;justify-items:start;gap:2px}
+.horse-info strong{overflow-wrap:anywhere;line-height:1.22;font-size:15px;font-weight:850}
+.horse-info small,.muted{color:var(--muted);font-size:12px}
+.muted svg{display:inline;vertical-align:middle}
+.sep{margin:0 2px}
+.chip{padding:1px 7px;background:#eaf3e9;color:#245b39;border-radius:4px;font-size:10px;font-weight:800}
+.condition{align-self:stretch;display:grid;align-content:center;gap:6px;border-left:1px solid #edf0eb;padding-left:9px}
+.condition>span:first-child{font-weight:800;font-size:12px}
+.amber{color:#875d11}.danger{color:#a32632}.gold-text{color:#976d19}
+.fatigue{font-size:10px;color:#53635a;gap:4px!important;white-space:nowrap}
+.meter{display:block;height:7px;border-radius:20px;overflow:hidden;background:#e6ebe5;flex:1;min-width:10px}
+.meter>span{height:100%;display:block;background:#337d49;border-radius:inherit}
+.row-chevron{color:#597465}
+.quick{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.quick button{display:flex;align-items:center;gap:7px;text-align:left;padding:10px;min-height:66px}
+.quick button>svg{margin-left:auto;color:#44644e;flex:none}
+.quick-icon{background:#ebf2e8;color:#1f6b3a;border-radius:7px;padding:7px;flex:none}
+.quick-icon.gold-text{background:#f7eed7;color:#976d19}
+.quick strong,.quick small{display:block}
+.quick strong{font-size:13px}
+.quick small{font-size:10px;color:var(--muted);margin-top:2px}
+.bottom{position:fixed;z-index:4;bottom:0;left:0;right:0;background:#fffffffa;border-top:1px solid #dae3d8;box-shadow:0 -3px 15px #172f2110;padding-bottom:env(safe-area-inset-bottom)}
+.bottom>div{display:grid;grid-template-columns:repeat(5,1fr);max-width:720px;margin:auto}
+.bottom button{position:relative;color:#52615a;min-height:62px;display:flex;align-items:center;justify-content:center;gap:3px;flex-direction:column;font-weight:750;font-size:10px;padding:6px 1px}
+.bottom button.current{color:#1d6539;background:#eff5ec}
+.bottom button.current:before{content:"";position:absolute;top:0;left:28%;right:28%;height:3px;border-radius:0 0 3px 3px;background:var(--green)}
+.button{display:flex;align-items:center;justify-content:center;gap:6px;padding:10px 9px;min-height:43px;border-radius:7px;font-size:13px;font-weight:800}
+.primary{background:var(--green);color:white}
+.outline{border:1px solid #ad8637;color:#6c4a10;background:#fff9e9}
+.actions>*{flex:1}.actions{align-items:stretch}
+.segmented{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:white}
+.segmented button,.bet-types button{padding:9px 4px;font-weight:800}
+.active{background:var(--green)!important;color:white!important}
+.market-row,.history-row{display:flex;align-items:center;justify-content:space-between;gap:9px;border-top:1px solid var(--line);padding:9px 0;text-align:left}
+.market-row small,.history-row small{display:block;color:var(--muted)}
+.horse-detail{position:relative;overflow:hidden;border-radius:8px;background:#19312a;color:white}
+.horse-detail .horse-photo{height:255px;background-position:center 43%}
+.horse-detail>div:last-child{position:absolute;inset:auto 0 0;background:linear-gradient(transparent,#081f2af5);padding:27px 16px 12px}
+.horse-detail p{color:#f4d181}
+.stat{display:grid;grid-template-columns:72px 1fr 40px;align-items:center;gap:8px}
+.stat strong{text-align:right}.stat .meter{height:11px}
+.apt{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.apt>div{padding:7px;border:1px solid var(--line);border-radius:6px;display:flex;align-items:center;justify-content:space-between;gap:4px;font-size:12px}
+.apt b{color:#23563a}
+.registration{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:5px;font-size:12px;font-weight:800}
+select{border:1px solid #ccd7ca;border-radius:5px;background:#f8faf7;color:var(--navy);min-height:36px;padding:4px}
+.days{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.days label{display:grid;text-align:center;font-weight:800;gap:4px}
+.days select{width:100%;font-size:11px}
+.menu-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+.menu-grid div{display:grid;gap:3px;border:1px solid var(--line);border-radius:6px;padding:7px}
+.menu-grid small{font-size:10px;color:var(--muted)}
+.fatigue-board{padding:11px 14px;display:flex;align-items:center;justify-content:space-between;font-weight:800}
+.fatigue-board strong{font-size:29px}
+.schedule-grid{display:grid;gap:9px;grid-template-columns:repeat(auto-fit,minmax(min(100%,270px),1fr))}
+.schedule-title{justify-content:space-between}.schedule-title small,.race-meta{color:var(--muted);font-weight:700}
+.bet-types{display:grid;grid-template-columns:repeat(4,1fr);gap:3px;background:white;border:1px solid var(--line);padding:4px;border-radius:8px}
+.bet-types button{border-radius:5px;font-size:12px}
+.runners{gap:0}.runners .muted{margin:4px 0 8px}
+.runner{display:grid;grid-template-columns:29px 1fr 54px;align-items:center;gap:10px;text-align:left;padding:6px;border-top:1px solid var(--line)}
+.runner strong,.runner small{display:block}.runner small{color:var(--muted)}.runner.picked{background:#e0eedc}
+.gate{display:inline-grid;place-items:center;width:26px;height:27px;border:1px solid #a1a9a180;border-radius:4px;font-weight:900}
+.runner-odds{text-align:center;padding:3px 2px;font-size:16px;font-weight:850}
+.stepper button{display:grid;place-items:center;background:var(--green);border-radius:50%;color:white;width:28px;height:28px}
+.selection{display:flex;justify-content:space-between;gap:7px;font-weight:750}
+.result-row{padding:6px 0;border-top:1px solid var(--line);font-size:13px}
+.result-row>span:first-child{flex:1}
+.watch-content{background:var(--navy);color:#fff;padding-bottom:18px}
+.broadcast-title{text-align:center}.broadcast-title h1{margin:5px 0}
+.live-ranks{display:grid;grid-template-columns:repeat(4,1fr);gap:3px;text-align:center}
+.live-ranks>div{display:grid;justify-items:center;border:1px solid #ffffff2b;padding:4px;gap:2px}
+.live-ranks small{color:#edce83}.live-ranks>div>span:last-child{font-size:9px}
+.track{height:215px;position:relative;overflow:hidden;border-radius:8px;background:linear-gradient(#d7ecf0 0 18%,#244a36 18% 28%,transparent 28%),repeating-linear-gradient(0deg,#63963c 0 20px,#598b37 20px 40px)}
+.rail{position:absolute;inset:26% 0 auto;border-top:5px solid #fff;box-shadow:0 7px 0 #e7ebd2}
+.finish-line{position:absolute;left:90%;top:32%;bottom:0;border-left:3px dashed #fff}
+.runner-sprite{position:absolute;display:flex;gap:2px;align-items:center;transition:left .22s linear;transform:translateX(-50%);}
+.gallop{font-size:26px;display:inline-block;transform:scaleX(-1);animation:gallop .22s infinite alternate}
+@keyframes gallop{to{transform:translateY(-3px) scaleX(-1)}}
+@media(prefers-reduced-motion:reduce){.gallop{animation:none}.runner-sprite{transition:none}}
+.runner-sprite .gate{height:16px;width:16px;font-size:10px}
+.commentary{border:1px solid var(--gold);border-radius:8px;padding:12px;font-weight:750;min-height:50px}
+.silk-preview{background:linear-gradient(130deg,#103d28,#235f3b);border-radius:8px;padding:20px;display:grid;justify-items:center}
+.silk-art{display:grid;justify-items:center;gap:3px;width:100%;max-width:112px}
+.cap{width:32%;aspect-ratio:1.5;border-radius:100% 100% 30% 30%;border:1px solid #17222660}
+.jersey{width:100%;aspect-ratio:1.25;clip-path:polygon(23% 0,38% 0,50% 12%,62% 0,77% 0,100% 78%,78% 92%,69% 59%,70% 100%,30% 100%,31% 59%,22% 92%,0 78%)}
+.jersey-body{width:57%;height:100%;margin:auto;display:grid;place-items:center;color:white;font-weight:900}
+.pattern-0{background-image:repeating-linear-gradient(90deg,#fff 0 9%,transparent 9% 29%)}
+.pattern-1{background-image:linear-gradient(45deg,transparent 41%,white 41% 58%,transparent 58%)}
+.pattern-2{position:relative}.pattern-2:after{content:"";position:absolute;inset:0;background:white;clip-path:polygon(0 56%,50% 27%,100% 56%,100% 75%,50% 46%,0 75%)}
+.pattern-3{background-image:linear-gradient(transparent 40%,white 40% 58%,transparent 58%)}
+.pattern-grid,.swatches{display:flex;flex-wrap:wrap;gap:6px}
+.pattern-grid button{min-width:45px;flex:1;border:1px solid var(--line);border-radius:6px;display:grid;justify-items:center;padding:4px;font-size:10px;font-weight:800}
+.pattern-grid .silk-art{width:35px}
+.swatches button{display:grid;justify-items:center;gap:3px;min-width:45px;font-size:9px}
+.swatches button span{width:26px;height:26px;border-radius:50%;border:1px solid #34473580}
+.swatches .chosen{outline:2px solid #b88e32;outline-offset:2px}
+.toast{position:fixed;z-index:8;bottom:calc(72px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);width:max-content;max-width:90vw;border-radius:8px;background:#0b1f33;color:white;padding:10px 14px;box-shadow:0 4px 16px #0003;font-size:13px;font-weight:750}
+.loading{display:grid;place-items:center;min-height:100dvh;font-weight:850;color:var(--green)}
+@media(max-width:450px){
+ .top-inner{padding:11px 13px;gap:8px;min-height:65px}.brand{font-size:16px}.crest,.icon-button{width:34px;height:34px}.points{min-width:91px;padding:4px 7px}.points strong{font-size:19px}.content{padding:13px 12px 8px;gap:13px}.hero{min-height:191px}.hero-copy{padding:16px 13px}.hero h1{margin-top:12px}.hero-bottom{margin-top:16px}.horse-row{grid-template-columns:59px minmax(0,1.2fr) minmax(73px,.78fr) 9px;gap:6px;min-height:70px}.horse-photo{height:55px}.horse-info strong{font-size:13px}.horse-info small{font-size:10px}.condition{padding-left:5px}.row-chevron{width:11px}.quick button{padding:6px;gap:5px}.quick-icon{padding:4px}.quick small{font-size:9px}.quick strong{font-size:12px}.quick button>svg{width:10px}
+}
+.live-silk{position:absolute;left:5px;top:-7px;width:17px;filter:drop-shadow(0 0 1px #fff)}
