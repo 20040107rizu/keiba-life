@@ -106,6 +106,7 @@ jobs:
         run: |
           python3 - <<'PYTHON'
           import hashlib
+          import unicodedata
           import json
           import os
           import subprocess
@@ -132,14 +133,15 @@ jobs:
                   "from": [{"collectionId": "users"}],
                   "select": {"fields": [{"fieldPath": "nickname"}]},
               }}
+              rows = call(BASE + ":runQuery", "POST", query)
               matches = [
-                  doc["name"] for row in call(BASE + ":runQuery", "POST", query)
+                  doc["name"] for row in rows
                   if (doc := row.get("document"))
                   and (nickname := doc.get("fields", {}).get("nickname", {}).get("stringValue"))
-                  and hashlib.sha256((salt + nickname).encode()).hexdigest() == digest
+                  and hashlib.sha256((salt + unicodedata.normalize("NFKC", nickname).strip()).encode()).hexdigest() == digest
               ]
               if len(matches) != 1:
-                  raise SystemExit("Nickname did not match exactly one account. No update.")
+                  raise SystemExit(f"Matching profiles: {len(matches)}. No update.")
           
               path = BASE + "/saves/" + matches[0].rsplit("/", 1)[1]
               doc = call(path)
