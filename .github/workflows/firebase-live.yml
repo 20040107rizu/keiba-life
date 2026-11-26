@@ -4,11 +4,6 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      operation:
-        type: choice
-        options: [publish, credit]
-        default: publish
 
 permissions:
   contents: read
@@ -20,7 +15,7 @@ concurrency:
 
 jobs:
   publish:
-    if: github.ref == 'refs/heads/main' && inputs.operation != 'credit'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: firebase-production
@@ -81,103 +76,3 @@ jobs:
           done
           echo 'The live site did not return the new application bundle.' >&2
           exit 1
-
-  credit:
-    if: github.ref == 'refs/heads/main' && github.actor == '20040107rizu' && inputs.operation == 'credit'
-    runs-on: ubuntu-latest
-    environment: firebase-production
-    steps:
-      - name: Resolve project
-        id: project
-        run: |
-          number=$(curl -fsS https://keiba-life.web.app/__/firebase/init.json | jq -er 'select(.projectId == "keiba-life") | .messagingSenderId')
-          [[ "$number" =~ ^[0-9]+$ ]]
-          echo "number=$number" >> "$GITHUB_OUTPUT"
-      - uses: google-github-actions/auth@v2
-        id: google
-        with:
-          workload_identity_provider: projects/${{ steps.project.outputs.number }}/locations/global/workloadIdentityPools/keiba-github/providers/github
-          service_account: keiba-github-deploy@keiba-life.iam.gserviceaccount.com
-          token_format: access_token
-          create_credentials_file: false
-      - name: Apply guarded balance correction
-        env:
-          FIRESTORE_ADMIN_TOKEN: ${{ steps.google.outputs.access_token }}
-        run: |
-          python3 - <<'PYTHON'
-          import hashlib
-          import unicodedata
-          import json
-          import os
-          import subprocess
-          from datetime import datetime, timezone
-          from urllib.error import HTTPError
-          from urllib.parse import urlencode
-          from urllib.request import Request, urlopen
-          
-          BASE = "https://firestore.googleapis.com/v1/projects/keiba-life/databases/(default)/documents"
-          
-          def update():
-              token = os.environ["FIRESTORE_ADMIN_TOKEN"]
-              def call(url, method="GET", body=None):
-                  data = None if body is None else json.dumps(body, ensure_ascii=False).encode()
-                  req = Request(url, data=data, method=method, headers={
-                      "Authorization": "Bearer " + token, "Content-Type": "application/json",
-                  })
-                  with urlopen(req, timeout=30) as response:
-                      return json.load(response)
-          
-              salt = "280d2ecd952b1e31b91ed759eb1fc278"
-              digest = "a8f64fcb6f28a173da91c269d65d46f78c29ce04527a45e0a7ca452fc7d1d5f1"
-              query = {"structuredQuery": {
-                  "from": [{"collectionId": "users"}],
-                  "select": {"fields": [{"fieldPath": "nickname"}]},
-              }}
-              rows = call(BASE + ":runQuery", "POST", query)
-              matches = [
-                  doc["name"] for row in rows
-                  if (doc := row.get("document"))
-                  and (nickname := doc.get("fields", {}).get("nickname", {}).get("stringValue"))
-                  and hashlib.sha256((salt + unicodedata.normalize("NFKC", nickname).strip()).encode()).hexdigest() == digest
-              ]
-              eligible = []
-              for match in matches:
-                  path = BASE + "/saves/" + match.rsplit("/", 1)[1]
-                  try:
-                      doc = call(path)
-                  except HTTPError as error:
-                      if error.code != 404:
-                          raise
-                      continue
-                  save = json.loads(doc["fields"]["data"]["stringValue"])
-                  game = save.get("game", {})
-                  if save.get("version", 0) >= 4 and type(game.get("points")) is int and game["points"] == 0:
-                      eligible.append((path, doc, save, game))
-              if len(eligible) != 1:
-                  raise SystemExit(f"Matching zero-balance saves: {len(eligible)}. No update.")
-              path, doc, save, game = eligible[0]
-
-              stamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-              game["points"] = 1_000_000_000
-              save["savedAt"] = stamp
-              params = urlencode([
-                  ("updateMask.fieldPaths", "data"), ("updateMask.fieldPaths", "savedAt"),
-                  ("currentDocument.updateTime", doc["updateTime"]),
-              ])
-              call(path + "?" + params, "PATCH", {"fields": {
-                  "data": {"stringValue": json.dumps(save, ensure_ascii=False, separators=(",", ":"))},
-                  "savedAt": {"stringValue": stamp},
-              }})
-              value = json.loads(call(path)["fields"]["data"]["stringValue"])["game"]["points"]
-              if value != 1_000_000_000:
-                  raise SystemExit("更新後の残高を確認できませんでした。")
-              print("Verified requested balance correction.")
-          
-          if __name__ == "__main__":
-              try:
-                  update()
-              except HTTPError as error:
-                  raise SystemExit(f"Firestoreの処理に失敗しました（HTTP {error.code}）。")
-              except subprocess.CalledProcessError:
-                  raise SystemExit("Google Cloudの認証を確認してください。")
-          PYTHON
