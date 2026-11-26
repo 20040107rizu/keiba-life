@@ -1,3 +1,6 @@
+import { cpuNames, horseNames, starterNames } from './roster';
+import { DEFAULT_STABLE_CAP, formatYen } from './economy';
+import { automaticJockey, jockeyOf } from './jockeys';
 // lib/game.ts
 // ゲームロジック本体（UIから使う関数・型はすべてここから export）
 import { races, type Race } from './races';
@@ -16,8 +19,9 @@ export const forms = ['絶不調', '不調', '普通', '好調', '絶好調'];
 export const rarity = ['R', 'SR', 'SSR'];
 export const growthTypes = ['早熟', '普通', '晩成'];
 export const STAT_MAX = 1200;
+export const HORSE_AGE_WEEKS = 104;
 export const RETIRE_AGE = 11;
-export const STABLE_LIMIT = 10;
+
 
 /** 1日あたりの効果。gain は stats の順 */
 export const menus = [
@@ -33,8 +37,10 @@ export const defaultPlan = [0, 1, 5, 2, 4, 5, 6];
 
 // ───────── 型 ─────────
 export type Silks = { pattern: number; body: string; sleeve: string; cap: string };
+export type HorseAppearance = { coat?: number; blaze?: number; hood?: string; silks?: Silks };
 export type Horse = {
-  id: string; name: string; age: number; sex: string;
+  appearance?: HorseAppearance;
+  id: string; name: string; customName?: boolean; purchasePrice?: number; age: number; ageDue?: number; sex: string;
   /** 能力値（stats の順、0〜1200） */
   values: number[];
   /** 能力ごとの成長限界 */
@@ -69,16 +75,18 @@ export type Pedigree = { sire: PedigreeNode; dam: PedigreeNode };
 /** 受胎中の繁殖牝馬。foal は種付け時に決まり、dueTime に誕生する */
 export type Pregnancy = { id: string; damId: string; sireId: string; sireName: string; damName: string; matedAt: number; dueTime: number; foal: Horse };
 export type Entry = {
+  jockeyId?: string;
   number: number; frame: number; horse: Horse; strength: number; owned: boolean;
   /** リーグの友だちの馬のとき：持ち主のユーザーIDとニックネーム */
   ownerId?: string; owner?: string;
 };
 export type Ticket = { type: number; numbers: number[]; stake: number };
-export type Card = { registered: string | null; entries: Entry[]; tickets: Ticket[] };
+export type Card = { registered: string | null; jockeyId?: string; registrationFee?: number; entries: Entry[]; tickets: Ticket[] };
 export type Result = {
   key: string; race: Race; order: Entry[]; payouts: number[]; tickets: Ticket[]; prize: number;
   /** 着順ごとの走破タイム（秒） */
   times: number[];
+  finishTimes?: number[];
   /** 着順ごとの着差（1着は空） */
   margins: string[];
   /** 実況用の途中経過（古い結果は容量節約のため空） */
@@ -89,16 +97,14 @@ export type Result = {
   winOdds: number[];
 };
 export type Game = {
-  time: number; points: number; horses: Horse[]; plans: Record<string, number[]>; cards: Record<string, Card>;
+  time: number; points: number; stableCap: number; tutorialDone: boolean; horses: Horse[]; plans: Record<string, number[]>; cards: Record<string, Card>;
   history: Result[]; silks: Silks; spent: number; returned: number; prize: number; report: string[]; market: Horse[];
   /** 受胎中の繁殖牝馬（配合） */
   pregnancies: Pregnancy[];
+  soldHorses: {horse: Horse; time: number; price: number}[];
 };
 
 // ───────── 馬の生成 ─────────
-const horseNames = ['ブルームフィールド', 'ルミエールリーフ', 'ヴェルデシエロ', 'ナイトリバー', 'ゴールドフェザー', 'ミストバレー', 'グリーンコメット', 'サクラノヴァ', 'オーシャンリズム', 'シルバーパス', 'メドウベル', 'スカイラピス'];
-const cpuNames = ['ハヤテノツバサ', 'ミナモノシラベ', 'ソラカケルユメ', 'ホシクズダンサー', 'アカツキエール', 'カザハナルート', 'シオサイブルー', 'ヨイマチレター', 'ツキアカリロード', 'ハナミズキワルツ', 'フユノオリオン', 'ナツゾラマーチ', 'アキツシマカゼ', 'コハクスプリント', 'ルリイロノアサ', 'ヒスイノカナタ', 'イブキスピリット', 'マドロミカノン', 'タマユラリズム', 'セセラギエコー', 'オボロヅキ', 'キラメキパレード', 'ノハラノヒカリ', 'ミライノトビラ'];
-
 /** 得意距離を中心に山なり、芝かダートのどちらかが得意な適性を作る */
 function makeAptitude(random: Random): number[] {
   const best = Math.floor(random() * 4);
@@ -122,25 +128,25 @@ function makeHorse(id: string, name: string, quality: number, base: number, rand
 }
 
 export const makeMarket = (time: number) =>
-  Array.from({ length: 3 }, (_, i) => makeHorse('market-' + time + '-' + i, horseNames[(time + i + 3) % horseNames.length], i, 420 + i * 65));
-export const marketPrices = [1200, 2200, 3600];
+  Array.from({ length: 3 }, (_, i) => makeHorse('market-' + time + '-' + i, horseNames[i][(time + i + 3) % horseNames[i].length], i, 420 + i * 65));
+export const marketPrices = [2_000_000, 5_000_000, 12_000_000];
 
 export function drawHorse(): Horse {
   const roll = Math.random();
   const quality = roll < 0.1 ? 2 : roll < 0.4 ? 1 : 0;
-  return makeHorse(crypto.randomUUID(), horseNames[Math.floor(Math.random() * horseNames.length)], quality, 400 + quality * 100);
+  return makeHorse(crypto.randomUUID(), horseNames[quality][Math.floor(Math.random() * horseNames[quality].length)], quality, 400 + quality * 100);
 }
 
 export function initialGame(): Game {
   const horses: Horse[] = [
-    { ...makeHorse('starter-1', 'アオバストライド', 1, 540), values: [724, 638, 587, 655, 522, 609], potential: [1020, 960, 940, 1000, 900, 950], growth: 1, apt: [3, 5, 6, 4, 7, 2], style: 1, form: 4, fatigue: 14, sex: '牡' },
-    { ...makeHorse('starter-2', 'ルナグレイス', 1, 500), values: [642, 704, 559, 611, 603, 575], potential: [960, 1050, 900, 940, 980, 930], growth: 2, apt: [2, 4, 6, 7, 6, 3], style: 2, form: 3, fatigue: 28, sex: '牝' },
-    { ...makeHorse('starter-3', 'ノーブルゲイル', 0, 450), values: [589, 522, 680, 540, 598, 479], potential: [900, 820, 980, 860, 900, 820], growth: 0, apt: [6, 7, 4, 2, 4, 7], style: 0, form: 2, fatigue: 42, sex: '牡' },
+    { ...makeHorse('starter-1', starterNames[0], 1, 540), values: [724, 638, 587, 655, 522, 609], potential: [1020, 960, 940, 1000, 900, 950], growth: 1, apt: [4, 5, 6, 4, 7, 5], style: 1, form: 4, fatigue: 14, sex: '牡' },
+    { ...makeHorse('starter-2', starterNames[1], 1, 500), values: [682, 704, 606, 650, 603, 575], potential: [960, 1050, 900, 940, 980, 930], growth: 2, apt: [4, 6, 6, 7, 7, 5], style: 2, form: 3, fatigue: 28, sex: '牝' },
+    { ...makeHorse('starter-3', starterNames[2], 0, 450), values: [625, 565, 681, 575, 598, 479], potential: [900, 820, 980, 860, 900, 820], growth: 0, apt: [6, 7, 4, 2, 6, 7], style: 0, form: 2, fatigue: 42, sex: '牡' },
   ];
   return {
-    time: 1, points: 10000, horses, plans: {}, cards: {}, history: [],
+    time: 1, points: 30_000_000, stableCap: DEFAULT_STABLE_CAP, tutorialDone: false, horses, plans: {}, cards: {}, history: [],
     silks: { pattern: 1, body: '#1F6B3A', sleeve: '#C9A24B', cap: '#1F6B3A' },
-    spent: 0, returned: 0, prize: 0, report: [], market: makeMarket(1), pregnancies: [],
+    spent: 0, returned: 0, prize: 0, report: [], market: makeMarket(1), pregnancies: [], soldHorses: [],
   };
 }
 
@@ -180,7 +186,7 @@ const headroom = (value: number, potential: number) => {
 };
 /** ケガのしやすさ：疲労35%を超えると急増、高齢でも増える */
 export const injuryFactor = (fatigue: number, age: number) =>
-  (1 + Math.max(0, fatigue - 35) / 15) ** 2 * (age >= 7 ? 1 + (age - 6) * 0.15 : 1);
+  (1 + Math.max(0, fatigue - 35) / 15) ** 2 * (age >= 7 ? 1 + (age - 6) * 0.075 : 1);
 
 const INJURIES: [string, number, number][][] = [
   [['ソエ', 1, 2], ['打撲', 1, 3], ['挫石', 1, 2]],
@@ -220,7 +226,7 @@ function trainWeek(h: Horse, sequence: number[], raceWeek: boolean, random: Rand
   const gains = [0, 0, 0, 0, 0, 0];
   let injury = 0;
   let injuryName: string | undefined;
-  const rate = growthRate(h) * (FORM_TRAINING[h.form] ?? 1);
+  const rate = growthRate(h) * 0.65 * (FORM_TRAINING[h.form] ?? 1);
   for (const index of sequence) {
     const m = menus[index] ?? menus[5];
     fatigue = clamp(fatigue + m.fatigue, 0, 100);
@@ -241,7 +247,7 @@ function trainWeek(h: Horse, sequence: number[], raceWeek: boolean, random: Rand
   const [, peakEnd] = PEAK[h.growth] ?? PEAK[1];
   const over = Math.max(0, h.age - peakEnd);
   const values = h.values.map((v, i) => {
-    const decline = over ? v * DECLINE[i] * over : 0;
+    const decline = over ? v * DECLINE[i] * over * 0.5 : 0;
     const raw = v + gains[i] - decline;
     return clamp(Math.floor(raw + random()), 0, STAT_MAX);
   });
@@ -258,21 +264,26 @@ function trainWeek(h: Horse, sequence: number[], raceWeek: boolean, random: Rand
 
 export function advance(game: Game, count: number, planHorse: string, random: Random = Math.random) {
   let time = game.time;
-  let horses = game.horses;
+  let horses = game.horses.map(h => h.ageDue === undefined ? { ...h, ageDue: game.time + HORSE_AGE_WEEKS } : h);
   let pregnancies = game.pregnancies ?? [];
   const before = horses;
+  let points = game.points;
   const events = new Map<string, string[]>();
   for (let i = 0; i < count; i++) {
+    points = Math.max(0, points - horses.filter(h => !h.retired).length * 50_000);
     time++;
     const raceWeek = races.some(r => r.week === week(time));
     horses = horses.map(h => {
-      const age = h.age + (week(time) === 1 ? 1 : 0);
+      const due = h.ageDue ?? time + HORSE_AGE_WEEKS;
+      const aged = !isFoal(h) && time >= due;
+      const age = h.age + Number(aged);
+      if (aged) h = { ...h, ageDue: due + HORSE_AGE_WEEKS };
       if (h.retired || age >= RETIRE_AGE) return { ...h, age, retired: true };
       if (h.foalUntil !== undefined) {
         const grown = nurseryWeek({ ...h, age }, random);
         if (time < h.foalUntil) return grown;
         events.set(h.id, [...(events.get(h.id) ?? []), '育成を終えて入厩（デビュー可能）']);
-        return { ...grown, foalUntil: undefined };
+        return { ...grown, foalUntil: undefined, ageDue: time + HORSE_AGE_WEEKS };
       }
       const sequence = i === 0 || h.id === planHorse ? game.plans[h.id] ?? defaultPlan : Array(7).fill(5);
       const { horse, log } = trainWeek({ ...h, age }, sequence, raceWeek, random);
@@ -297,21 +308,23 @@ export function advance(game: Game, count: number, planHorse: string, random: Ra
     const race = races.find(r => raceKey(game.time, r) === key);
     return (race && year(time) === year(game.time) && race.week >= week(time)) || card.tickets.length > 0;
   }));
-  return { ...game, time, horses, cards, report, market: makeMarket(time), pregnancies };
+  report.unshift('預託料 -' + formatYen(game.points - points));
+  return { ...game, time, points, horses, cards, report, market: makeMarket(time), pregnancies };
 }
 
 // ───────── 出馬表 ─────────
-export function field(game: Game, race: Race, registered: string | null): Entry[] {
+export function field(game: Game, race: Race, registered: string | null, jockeyId?: string): Entry[] {
   const random = seeded(raceKey(game.time, race));
   const active = game.horses.find(h => h.id === registered);
   const size = 8;
   const gate = Math.floor(random() * size);
-  const taken = new Set(game.horses.map(h => h.name));
+  const taken = new Set(active ? [active.name] : []);
   const names = shuffle(random, cpuNames.filter(n => !taken.has(n)));
   const band = race.distance <= 1400 ? 0 : race.distance <= 1800 ? 1 : race.distance <= 2400 ? 2 : 3;
+  const early = year(game.time) === 1 && race.week <= 6 && race.level <= 1;
   return Array.from({ length: size }, (_, i) => {
     const owned = i === gate && !!active;
-    const cpu = makeHorse('cpu-' + raceKey(game.time, race) + '-' + i, names[i % names.length], 0, 430 + race.level * 58, random);
+    const cpu = makeHorse('cpu-' + raceKey(game.time, race) + '-' + i, names[i % names.length], 0, (early ? 540 + race.level * 32 : 430 + race.level * 58), random);
     cpu.age = race.age ?? 3 + Math.floor(random() * 4);
     cpu.apt[band] = 4 + Math.floor(random() * 4);
     cpu.apt[race.surface === '芝' ? 4 : 5] = 4 + Math.floor(random() * 4);
@@ -320,7 +333,7 @@ export function field(game: Game, race: Race, registered: string | null): Entry[
     cpu.recovery = random() < 0.08;
     cpu.level = race.level;
     const h = owned && active ? active : cpu;
-    return { number: i + 1, frame: i + 1, horse: h, strength: strength(h, race), owned };
+    return { number: i + 1, frame: i + 1, horse: h, strength: strength(h, race), owned, jockeyId: owned ? jockeyOf(jockeyId).id : automaticJockey(i + 1) };
   });
 }
 
@@ -328,14 +341,16 @@ export function cardFor(game: Game, race: Race): Card {
   const saved = game.cards[raceKey(game.time, race)];
   if (saved?.tickets.length) return saved;
   const registered = saved?.registered ?? null;
-  return { registered, entries: field(game, race, registered), tickets: [] };
+  return { ...saved, registered, entries: field(game, race, registered, saved?.jockeyId), tickets: [] };
 }
 
 // ───────── レース開催 ─────────
-const prizeTable = [450, 550, 780, 1000, 1450, 2000, 3800, 6500, 12500];
+export const prizeTable = [7_000_000, 5_900_000, 8_200_000, 11_900_000, 18_100_000, 21_000_000, 43_000_000, 70_000_000, 150_000_000];
 const prizeShare = [1, 0.4, 0.25, 0.15, 0.1];
-/** クラスと着順（0始まり）から本賞金。5着より下は0 */
-export const prizeFor = (level: number, rank: number) => (rank < prizeShare.length ? Math.round((prizeTable[level] ?? 0) * prizeShare[rank]) : 0);
+export const prizeFor = (race: Race, rank: number) =>
+  Math.round((race.prize ?? races.find(r => r.title === race.title)?.prize ?? prizeTable[race.level] ?? 0) * (prizeShare[rank] ?? 0));
+export const registrationFee = (race: Race) => Math.floor(prizeFor(race, 0) / 10_000) * 100;
+export const horseName = (game: Game, id: string, fallback: string) => game.horses.find(h => h.id === id)?.name ?? game.soldHorses.find(s=>s.horse.id===id)?.horse.name ?? fallback;
 const KEEP_TIMELINE = 30;
 
 export function runRace(game: Game, race: Race, card: Card, random: Random = Math.random): { game: Game; result: Result } {
@@ -351,7 +366,7 @@ export function runRace(game: Game, race: Race, card: Card, random: Random = Mat
     const hit = winningCombos(t.type, sim.finish, size).some(ns => combo(t.type, ns) === combo(t.type, t.numbers));
     return hit ? Math.round(t.stake * odds(t.type, t.numbers, 0, sim.finish)) : 0;
   });
-  const prizes = order.map((e, i) => (e.owned && i < prizeShare.length ? Math.round(prizeTable[race.level] * prizeShare[i]) : 0));
+  const prizes = order.map((e, i) => (e.owned ? prizeFor(race, i) : 0));
   const prize = prizes.reduce((a, b) => a + b, 0);
   const returned = payouts.reduce((a, b) => a + b, 0);
   const notes = [...sim.notes];
@@ -384,7 +399,7 @@ export function runRace(game: Game, race: Race, card: Card, random: Random = Mat
 
   const result: Result = {
     key, race, order, payouts, tickets: card.tickets, prize,
-    times: sim.times, margins: sim.margins, timeline: sim.timeline, pace: sim.pace, notes,
+    times: sim.times, finishTimes: sim.finishTimes, margins: sim.margins, timeline: sim.timeline, pace: sim.pace, notes,
     winOdds: card.entries.map(e => odds(0, [e.number])),
   };
   const cards = { ...game.cards };
@@ -394,7 +409,7 @@ export function runRace(game: Game, race: Race, card: Card, random: Random = Mat
     result,
     game: {
       ...game, horses, cards, history,
-      points: game.points + prize + returned, prize: game.prize + prize, returned: game.returned + returned,
+      points: Math.max(0, game.points - card.entries.filter(e => e.owned).reduce((sum, e) => sum + jockeyOf(e.jockeyId).fee, 0)) + prize + returned, prize: game.prize + prize, returned: game.returned + returned,
       report: report.length ? [...report, ...game.report] : game.report,
     },
   };

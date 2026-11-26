@@ -1,3 +1,4 @@
+import { YEN_PER_POINT } from './economy';
 // lib/odds.ts
 // 馬券・オッズ：パリミュチュエル方式（CPUの仮想票 ＋ プレイヤーの票 − 控除率）
 import type { Entry, Ticket } from './game';
@@ -79,14 +80,14 @@ function cpuPools(entries: Entry[]): Map<string, number>[] {
     const list = Array.from(map);
     const weights = list.map(([, q]) => Math.max(q, 1e-7) ** VOTE_SHARPNESS);
     const total = weights.reduce((a, b) => a + b, 0);
-    return new Map(list.map(([key], i) => [key, Math.max(100, Math.round((CPU_POOL[type] * weights[i]) / total / 100) * 100)]));
+    return new Map(list.map(([key], i) => [key, Math.max(100, Math.round((CPU_POOL[type] * weights[i]) / total / 100) * 100) * YEN_PER_POINT]));
   });
 }
 
 export type OddsFunction = (type: number, numbers: number[], extra?: number, finish?: number[], bound?: 'min' | 'max') => number;
 
 /**
- * オッズ計算。戻り値の関数は「100ptあたりの払戻倍率」を返す。
+ * オッズ計算。戻り値の関数は「100円あたりの払戻倍率」を返す。
  * - extra: これから買う金額（購入後のオッズを試算）
  * - finish: 確定着順（複勝・ワイドは他の的中組の票数で配当が変わるため）
  * - bound: 確定前の複勝・ワイドは幅があるので下限(min)か上限(max)か

@@ -1,65 +1,57 @@
+import { damNames, studNames as sireNames } from './roster';
 // lib/breeding.ts
 // 配合（ブリーディング）：種牡馬・繁殖牝馬・遺伝・インブリード・血統表
 // 種牡馬の名前などの設定はこのファイル上部にまとめています（すべて架空の馬名）。
-import { STAT_MAX, STABLE_LIMIT, activeCount, rarity, week, year, type Game, type Horse, type Pedigree, type PedigreeNode, type Pregnancy } from './game';
+import { YEN_PER_POINT } from './economy';
+import { STAT_MAX, activeCount, rarity, week, year, type Game, type Horse, type Pedigree, type PedigreeNode, type Pregnancy } from './game';
 import { clamp, gaussian, seeded, type Random } from './random';
 
 // ───────── 設定 ─────────
 /** 種付けシーズン（この週の範囲で種付けできる） */
 export const BREEDING_SEASON: [number, number] = [5, 24];
-/** 受胎から誕生までの週数（約11か月）。シーズン中に種付けすると翌年の第1〜20週（春）に生まれる */
-export const GESTATION_WEEKS = 48;
+/** 受胎から誕生までの週数（44週）。既に受胎済みの出産日は保存値を使う */
+export const GESTATION_WEEKS = 44;
 /** 誕生からデビューできるまでの育成期間（週） */
-export const NURSERY_WEEKS = 20;
+export const NURSERY_WEEKS = 24;
 /** 繁殖牝馬として種付けできる年齢の上限 */
-export const BROODMARE_MAX_AGE = 20;
+export const BROODMARE_MAX_AGE = 16;
 /** 仔馬は2歳として生まれる（ゲームでは当歳〜1歳の期間を省略） */
 export const FOAL_AGE = 2;
 
-/** 種牡馬の祖先（血統表の2〜3代目に出てくる架空の名馬） */
-const foundation: PedigreeNode[] = [
-  { id: 'root-1', name: 'ロードオブグラス' },
-  { id: 'root-2', name: 'グレイトノーザン' },
-  { id: 'root-3', name: 'ミスタープロスパー' },
-  { id: 'root-4', name: 'サンライズクラウン' },
-  { id: 'root-5', name: 'ハイペリオンスター' },
-  { id: 'root-6', name: 'ブルーリボンレディ' },
-  { id: 'root-7', name: 'エメラルドクイーン' },
-  { id: 'root-8', name: 'シルクロードマダム' },
-  { id: 'root-9', name: 'スノーホワイトベル' },
-  { id: 'root-10', name: 'ムーンライトソング' },
-  { id: 'root-11', name: 'ダイヤモンドリリー' },
-  { id: 'root-12', name: 'ワイルドフロンティア' },
-  { id: 'root-13', name: 'カメリアプリンセス' },
-  { id: 'root-14', name: 'スプリングメドウ' },
-  { id: 'root-15', name: 'アンバーグロウ' },
-  { id: 'root-16', name: 'マーメイドテイル' },
-  { id: 'root-17', name: 'タイタンフォース' },
-  { id: 'root-18', name: 'リトルウィッシュ' },
+// 親馬の名前は実在の組み合わせ。共通する祖先は血統計算でも同じIDを使う。
+const parent = (name: string): PedigreeNode => ({ id: 'ancestor:' + name, name });
+const studParents = [
+ ['サンデーサイレンス','ウインドインハーヘア'],
+ ['キングマンボ','マンファス'],
+ ['キングカメハメハ','レディブラッサム'],
+ ['シンボリクリスエス','シーザリオ'],
+ ['ディープインパクト','キャットクイル'],
+ ['サンデーサイレンス','アイリッシュダンス'],
+ ['サンデーサイレンス','ゴールデンサッシュ'],
+ ['キングカメハメハ','アドマイヤグルーヴ'],
 ];
-const F = (i: number) => foundation[i - 1];
+const ancestor = (name: string, depth = 2): PedigreeNode => {
+ const horse = parent(name);
+ const parents = studParents[sireNames.indexOf(name)];
+ return parents && depth ? { ...horse, sire: ancestor(parents[0], depth - 1), dam: ancestor(parents[1], depth - 1) } : horse;
+};
 
 type StudSpec = {
   id: string; name: string; fee: number; values: number[]; potential: number[]; apt: number[]; style: number; growth: number;
   sire: PedigreeNode; dam: PedigreeNode;
 };
-/** ゲームが用意する種牡馬（値は引退時の能力。fee=種付け料pt） */
-const studSpecs: StudSpec[] = [
-  { id: 'stud-1', name: 'グランドマエストロ', fee: 3000, values: [1010, 930, 900, 980, 950, 900], potential: [1100, 1020, 980, 1080, 1040, 980], apt: [3, 5, 7, 6, 7, 2], style: 2, growth: 1,
-    sire: { id: 'sire-a', name: 'クラウンロード', sire: F(1), dam: F(6) }, dam: { id: 'dam-a', name: 'セレナーデロマン', sire: F(4), dam: F(9) } },
-  { id: 'stud-2', name: 'ストームブレイカー', fee: 2200, values: [990, 780, 1000, 960, 880, 820], potential: [1080, 860, 1080, 1040, 940, 880], apt: [7, 6, 4, 2, 5, 6], style: 0, growth: 0,
-    sire: { id: 'sire-b', name: 'サンダーゲート', sire: F(3), dam: F(7) }, dam: { id: 'dam-b', name: 'ハリケーンメイ', sire: F(2), dam: F(10) } },
-  { id: 'stud-3', name: 'エターナルサーガ', fee: 2600, values: [920, 1060, 880, 900, 1000, 950], potential: [1000, 1150, 960, 980, 1080, 1020], apt: [1, 3, 6, 7, 7, 3], style: 1, growth: 2,
-    sire: { id: 'sire-a', name: 'クラウンロード', sire: F(1), dam: F(6) }, dam: { id: 'dam-c', name: 'ロングジャーニー', sire: F(5), dam: F(8) } },
-  { id: 'stud-4', name: 'アイアンフォートレス', fee: 1800, values: [900, 880, 1060, 860, 950, 840], potential: [980, 960, 1140, 940, 1020, 900], apt: [4, 6, 6, 3, 3, 7], style: 1, growth: 1,
-    sire: { id: 'sire-c', name: 'ゴールドラッシュ', sire: F(3), dam: F(11) }, dam: { id: 'dam-d', name: 'デザートローズ', sire: F(12), dam: F(13) } },
-  { id: 'stud-5', name: 'シルバーアロー', fee: 1200, values: [960, 820, 860, 1000, 820, 880], potential: [1040, 900, 940, 1080, 900, 940], apt: [6, 7, 5, 2, 6, 4], style: 3, growth: 1,
-    sire: { id: 'sire-d', name: 'ノーザンライト', sire: F(14), dam: F(15) }, dam: { id: 'dam-e', name: 'フェアリーダンス', sire: F(1), dam: F(16) } },
-  { id: 'stud-6', name: 'ヴィクトリーロード', fee: 800, values: [880, 880, 880, 880, 880, 880], potential: [960, 960, 960, 960, 960, 960], apt: [4, 6, 6, 4, 6, 5], style: 1, growth: 1,
-    sire: { id: 'sire-c', name: 'ゴールドラッシュ', sire: F(3), dam: F(11) }, dam: { id: 'dam-f', name: 'ハーモニーベル', sire: F(17), dam: F(18) } },
-];
+/** ゲームが用意する種牡馬（値は引退時の能力。fee=種付け料の旧ポイント換算値） */
+const studSpecs: StudSpec[] = sireNames.map((name, i) => {
+  const [sire, dam] = studParents[i];
+  const fee = [3000, 2800, 2600, 2400, 1800, 1600, 1200, 2200][i];
+  const style = [2, 1, 1, 1, 2, 2, 3, 2][i];
+  const values = [950, 900, 890, 950, 900, 880].map((value, stat) => value + (i % 3 - 1) * 15 + (stat === style ? 40 : 0));
+  return { id: 'stud-' + (i + 1), name, fee, style, values,
+    potential: values.map(v => v + 100), apt: [4, 5, 7, 5, 7, 3], growth: 1,
+    sire: ancestor(sire), dam: ancestor(dam) };
+});
 
-export const studFee = (sireId: string) => studSpecs.find(s => s.id === sireId)?.fee ?? 0;
+export const studFee = (sireId: string) => Math.round((studSpecs.find(s => s.id === sireId)?.fee ?? 0) * YEN_PER_POINT / 100_000) * 100_000;
 
 /** ゲームの種牡馬を Horse の形で返す（能力表示・遺伝計算に使う） */
 export const studs: Horse[] = studSpecs.map(s => ({
@@ -69,25 +61,21 @@ export const studs: Horse[] = studSpecs.map(s => ({
 }));
 
 // ───────── 血統 ─────────
-const damNames = ['ハルカゼ', 'ユメミヅキ', 'ホシノシズク', 'サクラビジン', 'コトノハ', 'ミヤビ', 'アオイソラ', 'ヒカリノミチ', 'ナデシコ', 'シラユキ', 'カスミソウ', 'ツバキ'];
-const sireNames = ['ライジングエース', 'ブレイブハート', 'ミラクルステップ', 'ダンシングキング', 'スカイハイ', 'ウィンドワード'];
-
-/** 血統がない馬（セリ・ガチャ・初期馬）には、馬IDから決まる架空の血統をつける。
- *  ゲームの種牡馬の血を引くことがあり、その種牡馬（や同じ父系）と配合するとインブリードになる */
+/** 血統が未設定の馬にはゲーム内の仮想配合を設定する。 */
 function syntheticPedigree(id: string): Pedigree {
   const r = seeded('pedigree:' + id);
   const pick = <T,>(xs: T[]) => xs[Math.floor(r() * xs.length)];
   const unique = (role: string, name: string, depth: number): PedigreeNode => {
     const n: PedigreeNode = { id: 'p' + role + '-' + id, name };
     if (depth > 0) {
-      n.sire = unique(role + 's', pick(sireNames) + (depth > 1 ? '' : pick(['', 'II', 'ボーイ'])), depth - 1);
-      n.dam = unique(role + 'd', pick(damNames) + pick(['', 'スター', 'ローズ', 'ムーン']), depth - 1);
+      n.sire = unique(role + 's', pick(sireNames), depth - 1);
+      n.dam = unique(role + 'd', pick(damNames), depth - 1);
     }
     return n;
   };
   const sire = r() < 0.35 ? node(pick(studs), 2) : unique('s', pick(sireNames), 2);
-  const dam = unique('d', pick(damNames) + pick(['', 'スター', 'ローズ', 'ムーン']), 2);
-  // 母の父がゲームの種牡馬の父（クラウンロードなど）のこともある
+  const dam = unique('d', pick(damNames), 2);
+  // 母の父がゲームの種牡馬の父のこともある
   if (r() < 0.3) dam.sire = node(pick(studs.map(s => pedigreeOf(s).sire)), 1);
   return { sire, dam };
 }
@@ -164,7 +152,10 @@ export const isPregnant = (game: Game, damId: string) => (game.pregnancies ?? []
 /** 今シーズン、すでに種付けした牝馬か */
 const matedThisYear = (game: Game, damId: string) => (game.pregnancies ?? []).some(p => p.damId === damId && year(p.matedAt) === year(game.time));
 
-export const broodmares = (game: Game) => game.horses.filter(h => h.retired && h.sex === '牝' && h.age <= BROODMARE_MAX_AGE);
+export const guestBroodmares: Horse[] = damNames.slice(0,6).map((name,i) => ({
+ ...studs[i], id: 'broodmare-' + (i + 1), name, sex: '牝', pedigree: undefined,
+}));
+export const broodmares = (game: Game) => [...game.horses.filter(h => h.retired && h.sex === '牝' && h.age <= BROODMARE_MAX_AGE), ...guestBroodmares];
 export const ownStallions = (game: Game) => game.horses.filter(h => h.retired && h.sex === '牡');
 export const stallions = (game: Game) => [...ownStallions(game), ...studs];
 
@@ -175,8 +166,8 @@ export function breedingBlock(game: Game, sire: Horse | undefined, dam: Horse | 
   if (dam.age > BROODMARE_MAX_AGE) return dam.name + 'は繁殖を引退する年齢です。';
   if (isPregnant(game, dam.id) || matedThisYear(game, dam.id)) return dam.name + 'は受胎中です。';
   if (sire.id === dam.id) return '同じ馬どうしは配合できません。';
-  if (activeCount(game) + (game.pregnancies ?? []).length >= STABLE_LIMIT) return '厩舎の空きがありません（仔馬も1頭に数えます）。';
-  if (game.points < studFee(sire.id)) return 'ポイントが足りません。';
+  if (activeCount(game) + (game.pregnancies ?? []).length >= game.stableCap) return '厩舎の空きがありません（仔馬も1頭に数えます）。';
+  if (game.points < studFee(sire.id)) return '所持金が足りません。';
   return '';
 }
 

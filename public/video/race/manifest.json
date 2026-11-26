@@ -1,0 +1,18 @@
+{
+  "clips": [
+    {
+      "id": "01_prerace",
+      "file": "01_prerace.mp4",
+      "duration": 8.033333,
+      "surface": "共通",
+      "variants": []
+    },
+    {
+      "id": "02_gate",
+      "file": "02_gate.mp4",
+      "duration": 6.033333,
+      "surface": "共通",
+      "variants": []
+    }
+  ]
+}

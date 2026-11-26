@@ -1,10 +1,12 @@
+import { legacyHorseName, legacyJockey } from './legacy-roster';
+import { DEFAULT_STABLE_CAP, MAX_STABLE_CAP, YEN_PER_POINT, formatYen } from './economy';
 // lib/storage.ts
 // セーブ処理：バージョン付きで保存し、古いデータは順番に移行する。
 // 保存先は GameStorage の実装を差し替えるだけで変えられる（将来は Supabase 版を作って setGameStorage）。
-import { initialGame, makeMarket, strength, type Card, type Entry, type Game, type Horse, type PedigreeNode, type Pregnancy, type Result } from './game';
+import { HORSE_AGE_WEEKS, initialGame, makeMarket, strength, type Card, type Entry, type Game, type Horse, type HorseAppearance, type PedigreeNode, type Pregnancy, type Result } from './game';
 import { races } from './races';
 
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 6;
 export type SaveData = { version: number; savedAt: string; game: Game };
 
 export interface GameStorage {
@@ -44,10 +46,51 @@ function v1ToV2(data: Data): Data {
   };
 }
 
+const moneyKeys = new Set(['points', 'prize', 'spent', 'returned', 'earnings', 'stake', 'payout', 'payouts', 'bestPayout']);
+function convertMoney(value: unknown, money = false): unknown {
+  if (Array.isArray(value)) return value.map(item => convertMoney(item, money));
+  if (isObject(value)) return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, convertMoney(item, moneyKeys.has(key))]));
+  return money && typeof value === 'number' ? value * YEN_PER_POINT : value;
+}
+function v3ToV4(data: Data): Data {
+  return {
+    ...(convertMoney(data) as Data),
+    stableCap: DEFAULT_STABLE_CAP,
+    tutorialDone: false,
+    report: list(data.report).map(line => str(line, '').replace(/([\d,]+)\s*pt\b/g, (_, amount: string) => formatYen(Number(amount.replaceAll(',', '')) * YEN_PER_POINT))),
+  };
+}
+
+function v4ToV5(data: Data): Data {
+  const names = new Map<string, string>();
+  for (const h of list(data.horses).filter(isObject)) {
+    if (typeof h.id !== 'string' || typeof h.name !== 'string') continue;
+    names.set(h.id, h.customName === true ? h.name : legacyHorseName(h.id, h.name, num(h.rarity, 0)));
+  }
+  function visit(value: unknown): unknown {
+    if (Array.isArray(value)) return value.map(visit);
+    if (!isObject(value)) return value;
+    const out = Object.fromEntries(Object.entries(value).map(([key, item]) => [key, visit(item)]));
+    if (typeof value.jockeyId === 'string') out.jockeyId = legacyJockey(value.jockeyId);
+    if (value.customName !== true && typeof value.id === 'string' && typeof value.name === 'string') {
+      out.name = names.get(value.id) ?? legacyHorseName(value.id, value.name, num(value.rarity, 0));
+    }
+    for (const side of ['sire', 'dam']) {
+      const id = value[side + 'Id'], name = value[side + 'Name'];
+      if (typeof id === 'string' && typeof name === 'string') out[side + 'Name'] = names.get(id) ?? legacyHorseName(id, name);
+    }
+    return out;
+  }
+  return { ...(visit(data) as Data), tutorialDone: true };
+}
+
 /** キー＝移行元のバージョン。新しい形式を追加したらここに1つ足す */
 const migrations: Record<number, (data: Data) => Data> = {
   1: v1ToV2,
   /** v2 → v3：配合（血統・仔馬・受胎）を追加。新しい項目はすべて省略可能なので、受胎リストだけ用意する */
+  3: v3ToV4,
+  4: v4ToV5,
+  5: data => ({ ...data, soldHorses: [], tutorialDone: true }),
   2: data => ({ ...data, pregnancies: list(data.pregnancies) }),
 };
 
@@ -61,15 +104,36 @@ function sanitizeNode(raw: unknown, depth = 0): PedigreeNode | undefined {
   return result;
 }
 
+function sanitizeAppearance(raw: unknown): HorseAppearance | undefined {
+  if (!isObject(raw)) return undefined;
+  const appearance: HorseAppearance = {};
+  const color = (value: unknown): value is string => typeof value === 'string' && /^#[\da-f]{6}$/i.test(value);
+  if (typeof raw.coat === 'number' && Number.isInteger(raw.coat) && raw.coat >= 0 && raw.coat < 6) appearance.coat = raw.coat;
+  if (typeof raw.blaze === 'number' && Number.isInteger(raw.blaze) && raw.blaze >= 0 && raw.blaze < 4) appearance.blaze = raw.blaze;
+  if (raw.hood === '' || color(raw.hood)) appearance.hood = raw.hood;
+  if (isObject(raw.silks)) {
+    const { pattern, body, sleeve, cap } = raw.silks;
+    if (typeof pattern === 'number' && Number.isInteger(pattern) && pattern >= 0 && pattern < 6 && color(body) && color(sleeve) && color(cap)) {
+      appearance.silks = { pattern, body, sleeve, cap };
+    }
+  }
+  return Object.keys(appearance).length ? appearance : undefined;
+}
+
 function sanitizeHorse(raw: unknown, index: number): Horse | null {
   if (!isObject(raw)) return null;
   const rarityValue = num(raw.rarity, 0);
   const values = nums(raw.values, 6, 500).map(v => Math.max(0, Math.min(1200, Math.round(v))));
   const ceiling = [900, 1000, 1100][rarityValue] ?? 900;
   const potential = list(raw.potential).length === 6 ? nums(raw.potential, 6, ceiling) : values.map(v => Math.min(1200, Math.max(v + 150, ceiling)));
+  const appearance = sanitizeAppearance(raw.appearance);
   return {
+    ...(appearance ? { appearance } : {}),
     id: str(raw.id, 'horse-' + index),
+    ...(typeof raw.ageDue === 'number' ? { ageDue: raw.ageDue } : {}),
     name: str(raw.name, '名無しの馬'),
+    ...(typeof raw.purchasePrice === 'number' && raw.purchasePrice > 0 ? {purchasePrice:raw.purchasePrice} : {}),
+    ...(raw.customName === true ? { customName: true } : {}),
     age: num(raw.age, 3),
     sex: str(raw.sex, '牡'),
     values,
@@ -125,6 +189,7 @@ function sanitizeEntry(raw: unknown, index: number, raceTitle: string): Entry | 
   const race = races.find(r => r.title === raceTitle);
   const number = num(raw.number, index + 1);
   const entry: Entry = { number, frame: num(raw.frame, number), horse, strength: num(raw.strength, race ? strength(horse, race) : 600), owned: raw.owned === true };
+  if (typeof raw.jockeyId === 'string') entry.jockeyId = raw.jockeyId;
   if (typeof raw.ownerId === 'string') entry.ownerId = raw.ownerId;
   if (typeof raw.owner === 'string') entry.owner = raw.owner;
   return entry;
@@ -143,6 +208,7 @@ function sanitizeResult(raw: unknown): Result | null {
     payouts: tickets.map((_, i) => num(list(raw.payouts)[i], 0)),
     prize: num(raw.prize, 0),
     times: list(raw.times).map(t => num(t, 0)),
+    ...(Array.isArray(raw.finishTimes) ? {finishTimes:raw.finishTimes.map(t=>num(t,0))} : {}),
     margins: list(raw.margins).map(m => str(m, '')),
     timeline: Array.isArray(raw.timeline) ? (raw.timeline as Result['timeline']) : [],
     pace: num(raw.pace, 0),
@@ -153,8 +219,9 @@ function sanitizeResult(raw: unknown): Result | null {
 
 function sanitizeGame(data: Data): Game {
   const base = initialGame();
-  const horses = list(data.horses).map(sanitizeHorse).filter((h): h is Horse => !!h);
   const time = Math.max(1, Math.round(num(data.time, 1)));
+  const horses = list(data.horses).map(sanitizeHorse).filter((h): h is Horse => !!h)
+    .map(h => h.ageDue === undefined ? { ...h, ageDue: time + HORSE_AGE_WEEKS } : h);
   const cards: Record<string, Card> = {};
   if (isObject(data.cards)) {
     for (const [key, c] of Object.entries(data.cards)) {
@@ -163,6 +230,8 @@ function sanitizeGame(data: Data): Game {
       const tickets = list(c.tickets).filter(isObject).map(t => ({ type: num(t.type, 0), numbers: list(t.numbers).map(n => num(n, 1)), stake: num(t.stake, 100) }));
       cards[key] = {
         registered: typeof c.registered === 'string' ? c.registered : null,
+        ...(typeof c.jockeyId === 'string' ? { jockeyId: c.jockeyId } : {}),
+        ...(typeof c.registrationFee === 'number' ? { registrationFee: c.registrationFee } : {}),
         entries: list(c.entries).map((e, i) => sanitizeEntry(e, i, title)).filter((e): e is Entry => !!e),
         tickets,
       };
@@ -177,7 +246,9 @@ function sanitizeGame(data: Data): Game {
   return {
     time,
     points: num(data.points, base.points),
-    horses: horses.length ? horses : base.horses,
+    stableCap: Math.min(MAX_STABLE_CAP, Math.max(DEFAULT_STABLE_CAP, Math.round(num(data.stableCap, DEFAULT_STABLE_CAP)))),
+    tutorialDone: data.tutorialDone === true,
+    horses: Array.isArray(data.horses) ? horses : base.horses,
     plans,
     cards,
     history: list(data.history).map(sanitizeResult).filter((r): r is Result => !!r),
@@ -187,6 +258,10 @@ function sanitizeGame(data: Data): Game {
     prize: num(data.prize, 0),
     report: list(data.report).map(r => str(r, '')),
     market: market.length ? market : makeMarket(time),
+    soldHorses: list(data.soldHorses).filter(isObject).flatMap((item,i) => {
+      const horse = sanitizeHorse(item.horse,i);
+      return horse ? [{ horse, time:num(item.time,1), price:num(item.price,0) }] : [];
+    }),
     pregnancies: list(data.pregnancies).map(sanitizePregnancy).filter((p): p is Pregnancy => !!p),
   };
 }

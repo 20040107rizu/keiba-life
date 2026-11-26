@@ -48,7 +48,7 @@ export function summarize(game: Game): Summary {
 export type Player = { userId: string; nickname: string; summary: Summary };
 export type RankRow = { key: string; title: string; sub: string; value: string; me: boolean };
 
-const pt = (n: number) => n.toLocaleString('ja-JP') + ' pt';
+const yen = (n: number) => n.toLocaleString('ja-JP') + '円';
 const recovery = (s: Summary) => (s.spent ? s.returned / s.spent : -1);
 
 /** kind（rankingKinds の番号）ごとのランキング行。meId の行に me=true */
@@ -56,10 +56,10 @@ export function rankRows(kind: number, players: Player[], meId: string): RankRow
   const by = <T,>(list: T[], value: (x: T) => number) => [...list].sort((a, b) => value(b) - value(a));
   const row = (p: Player, value: string, sub = ''): RankRow => ({ key: p.userId, title: p.nickname, sub, value, me: p.userId === meId });
   switch (kind) {
-    case 0: return by(players, p => p.summary.prize).map(p => row(p, pt(p.summary.prize)));
+    case 0: return by(players, p => p.summary.prize).map(p => row(p, yen(p.summary.prize)));
     case 1: return by(players, p => p.summary.g1).map(p => row(p, p.summary.g1 + '勝'));
-    case 3: return by(players, p => recovery(p.summary)).map(p => row(p, p.summary.spent ? (recovery(p.summary) * 100).toFixed(1) + '%' : '—', '購入 ' + pt(p.summary.spent)));
-    case 4: return by(players, p => p.summary.bestPayout).map(p => row(p, pt(p.summary.bestPayout)));
+    case 3: return by(players, p => recovery(p.summary)).map(p => row(p, p.summary.spent ? (recovery(p.summary) * 100).toFixed(1) + '%' : '—', '購入 ' + yen(p.summary.spent)));
+    case 4: return by(players, p => p.summary.bestPayout).map(p => row(p, yen(p.summary.bestPayout)));
     default: {
       // 馬ごとのランキング（最強馬・注目馬）
       const horses = players.flatMap(p => (kind === 2 ? p.summary.strongest : p.summary.hot).map(h => ({ p, h })));

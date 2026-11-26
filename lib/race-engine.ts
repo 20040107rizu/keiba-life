@@ -1,3 +1,5 @@
+import { courseGrade } from './course-data';
+import { jockeyOf } from './jockeys';
 // lib/race-engine.ts
 // レース計算エンジン：能力・適性・脚質・調子・疲労・枠順・展開・ランダムから着順とタイムを決める
 import type { Entry, Horse } from './game';
@@ -30,6 +32,7 @@ export type RaceSimulation = {
   finish: number[];
   /** 着順ごとの走破タイム（秒） */
   times: number[];
+  finishTimes: number[];
   /** 着順ごとの前の馬との着差（1着は空文字） */
   margins: string[];
   /** 実況用の途中経過。d は馬番-1 の位置に走った距離(m) */
@@ -83,6 +86,10 @@ type Runner = {
   fade: number;
   accel: number;
   startAccel: number;
+  opening: number;
+  attackAt: number;
+  attackSpan: number;
+  attack: number;
   hp: number;
   scale: number;
   delay: number;
@@ -117,7 +124,7 @@ export function formatTime(seconds: number): string {
 export function simulateRace(race: Race, entries: Entry[], random: Random = Math.random): RaceSimulation {
   const D = race.distance;
   const venue = venueOf(race);
-  const straight = venue.straight[race.surface === '芝' ? 0 : 1];
+  const straight = venue.straight;
   const v0 = baseSpeed(race);
   const n = entries.length;
   const notes: string[] = [];
@@ -131,15 +138,18 @@ export function simulateRace(race: Race, entries: Entry[], random: Random = Math
 
   const runners: Runner[] = entries.map(e => {
     const h = e.horse;
+    const jockey = jockeyOf(e.jockeyId);
     const s = scaled(h);
     const style = clamp(h.style, 0, 3);
     const vMax = v0 * (1 + 0.1 * (abilityOf(s, race) - 0.9)) * aptitudeFactor(h, race) * (1 + gaussian(random) * DAY_NOISE);
     // 枠順：外枠ほどコーナーで外を回る距離ロス（前に行く馬ほど影響大）。差し・追込は直線で外に持ち出すロス
     const gateFrac = n > 1 ? (e.number - 1) / (n - 1) : 0;
     const extra = gateFrac * (D <= 1400 ? 6 : 4) * (style <= 1 ? 1 : 0.5) + (style >= 2 ? 1.5 : 0);
-    // スタート：賢さが低いと出遅れやすい
-    const late = random() < 0.05 * (1.3 - s[5]);
-    const delay = 0.1 + random() * 0.2 + (late ? 0.4 + random() * 0.5 : 0);
+    // 発馬の反応と二の脚。出遅れは序盤の実際の位置に残る。
+    const reaction = random();
+    const late = reaction < clamp(.10 - s[5]*.05 - jockey.start*.009, .025, .15);
+    const delay = clamp(.09 + random()*.28 - jockey.start*.018 - s[5]*.055, .035, .40) + (late ? .50 + random()*.53 : 0);
+    const opening = [.022,.013,-.004,-.012][style] + (random()-.5)*.042 + jockey.position*.002;
     if (late) notes.push(e.number + '番' + h.name + 'が出遅れ');
     // 内枠の差し・追込は直線で前が詰まることがある
     const blocked = style >= 2 && gateFrac < 0.5 && random() < 0.14 * (1.25 - s[5]);
@@ -157,17 +167,26 @@ export function simulateRace(race: Race, entries: Entry[], random: Random = Math
     kick = solve(reference - loss(cruise, kick));
     kick = solve(reference - loss(cruise, kick));
     const spurtStart = D - spurtLen;
+    // 一瞬の末脚と長く脚を使うまくり。脚質・展開・瞬発力で仕掛けを変える。
+    const sweeping = style >= 2 && random() < .35 + Math.max(0,pace)*.18;
+    const attackAt = sweeping
+      ? clamp(straight+150+(random()-.5)*180,220,D*.55)
+      : clamp((style>=2?270:155)+(random()-.5)*170,65,D*.38);
+    const attackSpan = sweeping ? 220 + random()*85 : 95 + random()*110;
+    const attack = (sweeping ? .035 : .040) + s[3]*.028 + s[4]*.012 + jockey.spurt*.003 + random()*.100;
+
     return {
       entry: e,
       number: e.number,
       s,
       vMax,
-      cruise: vMax * cruise * (1 + Math.max(0, pace) * 0.005 * PACE_EFFECT[style]),
-      spurt: vMax * kick * (1 - 0.022 * pace * PACE_EFFECT[style]),
+      cruise: vMax * cruise * (1 + jockey.position * .005) * (1 + Math.max(0, pace) * 0.005 * PACE_EFFECT[style]),
+      spurt: vMax * kick * (1 + jockey.spurt * .005) * (1 - 0.022 * pace * PACE_EFFECT[style]),
       save: STYLE_SAVE[style],
       fade: vMax * (0.92 + 0.04 * s[4]),
       accel,
-      startAccel: 4.5 + 1.5 * s[2],
+      startAccel: (4.45 + 1.6 * s[2]) * (1 + jockey.start * .015 + (random()-.5)*.18),
+      opening, attackAt, attackSpan, attack,
       hp: (300 + s[1] * 1000) / (300 + staminaNeed(D)),
       scale: D / (D + extra),
       delay,
@@ -179,8 +198,8 @@ export function simulateRace(race: Race, entries: Entry[], random: Random = Math
     };
   });
 
-  const dt = 0.25;
-  const interval = Math.max(1, D / v0 / 24);
+  const dt = 0.125;
+  const interval = Math.max(1.5, D / v0 / 36);
   const timeline: RaceSnapshot[] = [];
   const snap = (t: number) => {
     const d: number[] = [];
@@ -189,17 +208,24 @@ export function simulateRace(race: Race, entries: Entry[], random: Random = Math
   };
   let t = 0;
   let nextSnap = 0;
-  let leaderDone = false;
+  let leaderFinished = false;
   const blockedNoted = new Set<number>();
 
   while (runners.some(r => r.finish === undefined) && t < 900) {
-    if (!leaderDone && t >= nextSnap - 1e-9) {
+    // 全馬を同じ時点の位置で比較する（馬番の処理順で有利にならないようにする）。
+    const positions = runners.map(r => r.pos);
+    const leaders = [...positions].sort((a,b)=>b-a);
+    const leader = leaders[0];
+    if (t >= nextSnap - 1e-9) {
       snap(t);
-      nextSnap += interval;
+      const gap=leader-(leaders[1]??leader);
+      nextSnap=t+(t<1.25?.125:t<9?.25:D-leader<500?(gap<5?.25:.5):interval);
     }
     t += dt;
-    for (const r of runners) {
+    for (const [index,r] of runners.entries()) {
       if (r.finish !== undefined || t < r.delay) continue;
+      const activeDt=Math.min(dt,t-r.delay);
+      if(activeDt<=0)continue;
       const remaining = D - r.pos;
       let target: number;
       if (r.hp <= 0) target = r.fade;
@@ -209,11 +235,22 @@ export function simulateRace(race: Race, entries: Entry[], random: Random = Math
         const sustain = r.vMax * Math.sqrt((r.hp * D) / Math.max(1, remaining));
         target = clamp(sustain, r.fade, r.spurt);
       }
-      // ゴール前の坂：パワーが低いと止まる
-      if (remaining < 200) target *= 1 - venue.slope * 0.012 * clamp(1.1 - r.s[2], 0, 1);
+      const early = clamp(1-r.pos/235,0,1);
+      const pressing = early>0 && leader-r.pos<8 && positions.some((p,i)=>i!==index&&Math.abs(p-r.pos)<5);
+      const drive = early*(r.opening+(pressing?Math.max(0,r.opening)*.55:0));
+      const wave = clamp((r.attackAt-remaining)/r.attackSpan,0,1);
+      const attack = Math.sin(Math.PI*wave)*r.attack*clamp(r.hp*17,0,1);
+      const finishEffort = clamp((180-remaining)/140,0,1) *
+        clamp((r.attack-.103)*.9 + (r.s[4]-.65)*.018,-.035,.045) *
+        clamp((r.hp+.035)*13,0,1);
+      target *= 1 + drive + attack + finishEffort;
+      // 上り坂で少し減速。下りの加速と負荷補正は、既存のペースを保てる範囲に抑える。
+      const grade = courseGrade(venue, remaining);
+      const uphill = Math.max(0, grade);
+      target *= 1 - uphill * .005 * clamp(1.1 - r.s[2], 0, 1) + Math.min(1.7, Math.max(0, -grade)) * .0012;
       // 叩き合い：根性がある馬は競り合うと伸びる
-      if (remaining < 300 && runners.some(o => o !== r && o.finish === undefined && Math.abs(o.pos - r.pos) < 1.5)) {
-        target *= 1 + 0.005 * r.s[4];
+      if (remaining < 300 && positions.some((p,i)=>i!==index && p<D && Math.abs(p-r.pos)<2.2)) {
+        target *= 1 + 0.009 * r.s[4] * clamp(r.hp*10,0,1);
       }
       // 前が詰まる
       if (r.blockAt >= 0 && r.pos >= r.blockAt && r.blockLeft > 0) {
@@ -224,34 +261,37 @@ export function simulateRace(race: Race, entries: Entry[], random: Random = Math
           notes.push(r.number + '番' + r.entry.horse.name + 'が直線で前が詰まる');
         }
       }
-      const a = r.v < r.cruise * 0.9 && r.pos < 300 ? r.startAccel : r.accel;
-      r.v = r.v < target ? Math.min(target, r.v + a * dt) : Math.max(target, r.v - 0.8 * dt);
-      const step = r.v * dt * r.scale;
-      r.hp -= ((r.v / r.vMax) ** 2 * step * (r.pos < r.spurtStart ? r.save : 1)) / D;
+      const a = r.v < r.cruise * 0.9 && r.pos < 300 ? r.startAccel : r.accel*(1+attack*15);
+      r.v = r.v < target ? Math.min(target, r.v + a * activeDt) : Math.max(target, r.v - 0.8 * activeDt);
+      const step = r.v * activeDt * r.scale;
+      r.hp -= ((r.v / r.vMax) ** 2 * step * (r.pos < r.spurtStart ? r.save : 1) * (1 + Math.min(3, uphill) * .012 + Math.max(0,drive)*1.5 + attack*.7)) / D;
       const prev = r.pos;
       r.pos += step;
-      if (r.pos >= D) r.finish = t - dt + ((D - prev) / step) * dt;
+      if (r.pos >= D) r.finish = t - activeDt + ((D - prev) / step) * activeDt;
     }
-    if (!leaderDone && runners.some(r => r.finish !== undefined)) {
-      leaderDone = true;
-      snap(t);
+    if(!leaderFinished&&runners.some(r=>r.finish!==undefined)){
+      leaderFinished=true;
+      if(timeline.at(-1)?.t!==t)snap(t);
+      nextSnap=t+.25;
     }
+
   }
 
   const sorted = [...runners].sort((a, b) => (a.finish ?? 1e9) - (b.finish ?? 1e9));
-  const times = sorted.map(r => Math.round((r.finish ?? 900) * 10) / 10);
+  const finishTimes = sorted.map(r => r.finish ?? 900);
+  const times = finishTimes.map(t=>Math.round(t*10)/10);
   const margins = sorted.map((r, i) => {
     if (i === 0) return '';
     const diff = (r.finish ?? 900) - (sorted[i - 1].finish ?? 900);
     return marginLabel(diff / SECONDS_PER_LENGTH);
   });
-  return { finish: sorted.map(r => r.number), times, margins, timeline, pace, notes };
+  return { finish: sorted.map(r => r.number), times, finishTimes, margins, timeline, pace, notes };
 }
 
 // ───────── 実況用のヘルパー ─────────
 
 export type LiveRunner = { entry: Entry; distance: number; progress: number; gap: number };
-type LiveSource = { race: Race; order: Entry[]; timeline?: RaceSnapshot[]; times?: number[]; pace?: number; notes?: string[] };
+type LiveSource = { race: Race; order: Entry[]; timeline?: RaceSnapshot[]; times?: number[]; finishTimes?: number[]; pace?: number; notes?: string[] };
 
 /** ratio=0（スタート）〜1（ゴール）の時点の隊列。先頭から順に並ぶ。gap は先頭との差(m) */
 export function liveOrder(result: LiveSource, ratio: number): LiveRunner[] {
@@ -266,8 +306,14 @@ export function liveOrder(result: LiveSource, ratio: number): LiveRunner[] {
     });
   } else {
     const p = x * (timeline.length - 1);
-    const i = Math.min(timeline.length - 2, Math.floor(p));
-    const f = p - i;
+    let i = Math.min(timeline.length - 2, Math.floor(p));
+    let f = p - i;
+    if(result.finishTimes?.[0]){
+      const time=x*result.finishTimes[0];
+      i=0;
+      while(i<timeline.length-2&&timeline[i+1].t<time)i++;
+      f=clamp((time-timeline[i].t)/(timeline[i+1].t-timeline[i].t),0,1);
+    }
     list = result.order.map(entry => {
       const a = timeline[i].d[entry.number - 1] ?? 0;
       const b = timeline[i + 1].d[entry.number - 1] ?? a;
@@ -285,7 +331,7 @@ export function liveOrder(result: LiveSource, ratio: number): LiveRunner[] {
 export function liveComment(result: LiveSource, ratio: number): string {
   const live = liveOrder(result, ratio);
   const D = result.race.distance;
-  const straight = venueOf(result.race).straight[result.race.surface === '芝' ? 0 : 1];
+  const straight = venueOf(result.race).straight;
   const [first, second] = live;
   if (!first) return '';
   const name = (r: LiveRunner) => r.entry.number + '番' + r.entry.horse.name;

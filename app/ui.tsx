@@ -1,6 +1,7 @@
 // 画面で共通に使う小さな部品
 import { classes } from '../lib/races';
-import type { Entry, Silks } from '../lib/game';
+import { HorsePortrait } from './horse-art';
+import type { Entry, Horse, Silks } from '../lib/game';
 
 export const amount=(n:number)=>n.toLocaleString('ja-JP');
 export const rail=['#fff','#182023','#d83739','#2254a1','#f0ce31','#218340','#e97825','#e880a3'];
@@ -16,4 +17,9 @@ export function Grade({level}:{level:number}){return <span className={'grade '+(
 export function Meter({value,max=100}:{value:number;max?:number}){
  return <span className="meter"><span style={{width:(value/max*100)+'%',background:max===100 && value>=60?'#bf443f':max===100 && value>=30?'#d99b27':undefined}}/></span>;
 }
-export function HorsePhoto({index=0}:{index?:number}){return <div role="img" aria-label="競走馬" className={'horse-photo horse-photo-'+index%3}/>}
+export function HorsePhoto({horse,detail=false}:{horse:Horse;detail?:boolean}){return <HorsePortrait horse={horse} detail={detail} className="horse-photo"/>}
+
+export function RankBadge({horse}:{horse:Horse}) {
+ const rank=['R','SR','SSR'][horse.rarity]??'R';
+ return <span className={'rarity-badge rarity-'+rank.toLowerCase()}>{rank}</span>;
+}

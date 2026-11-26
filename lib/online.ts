@@ -1,3 +1,4 @@
+import { YEN_PER_POINT } from './economy';
 // lib/online.ts
 // オンライン対戦（Firebase：Authentication の匿名ログイン ＋ Cloud Firestore）
 // NEXT_PUBLIC_FIREBASE_* が未設定なら onlineConfigured=false になり、アプリはひとり用モードで動く。
@@ -15,7 +16,7 @@
 import type { Auth } from 'firebase/auth';
 import type { Firestore } from 'firebase/firestore';
 import type { Game, Horse, Result } from './game';
-import { friendPrizes, publicHorses, sharedResult, type ReceivedPrize, type SharedResult, type StableSnapshot } from './league';
+import { MAIN_LEAGUE, leagueProgress, friendPrizes, publicHorses, sharedResult, type ReceivedPrize, type SharedResult, type StableSnapshot } from './league';
 import { summarize, type Summary } from './ranking';
 import { createLocalStorage, migrate, serialize, type GameStorage } from './storage';
 
@@ -67,8 +68,10 @@ export async function currentProfile(): Promise<Profile | null> {
   const user = auth.currentUser;
   if (!user) return null;
   const snap = await fs.getDoc(fs.doc(db, 'users', user.uid));
-  const nickname = (snap.data()?.nickname as string | undefined) ?? 'ななし';
-  context = { userId: user.uid, nickname, leagueId: (snap.data()?.leagueId as string | null | undefined) ?? null };
+  const nickname = snap.data()?.nickname as string | undefined;
+  if (!nickname) return null;
+  if (snap.data()?.leagueId !== MAIN_LEAGUE) return signIn(nickname);
+  context = { userId: user.uid, nickname, leagueId: MAIN_LEAGUE };
   return { userId: user.uid, nickname };
 }
 
@@ -79,106 +82,91 @@ export async function signIn(nickname: string): Promise<Profile> {
   const { auth, db, au, fs } = await firebase();
   const user = auth.currentUser ?? (await au.signInAnonymously(auth)).user;
   const ref = fs.doc(db, 'users', user.uid);
-  const old = await fs.getDoc(ref);
-  const leagueId = (old.data()?.leagueId as string | null | undefined) ?? null;
+  const leagueId = MAIN_LEAGUE;
   await fs.setDoc(ref, { nickname: name, leagueId, updatedAt: Date.now() });
   context = { userId: user.uid, nickname: name, leagueId };
   return { userId: user.uid, nickname: name };
 }
 
-export async function signOut() {
-  const { auth, au } = await firebase();
-  await au.signOut(auth);
-  context = null;
-}
-
-/** 参加中のリーグとメンバー */
 export async function loadLeague(profile: Profile): Promise<OnlineState> {
-  const { db, fs } = await firebase();
-  const user = await fs.getDoc(fs.doc(db, 'users', profile.userId));
-  const leagueId = (user.data()?.leagueId as string | null | undefined) ?? null;
-  if (context) context.leagueId = leagueId;
-  if (!leagueId) return { profile, league: null, members: [] };
-  try {
-    const [league, members] = await Promise.all([
-      fs.getDoc(fs.doc(db, 'leagues', leagueId)),
-      fs.getDocs(fs.collection(db, 'leagues', leagueId, 'members')),
-    ]);
-    if (!league.exists()) return { profile, league: null, members: [] };
-    const d = league.data();
-    return {
-      profile,
-      league: { id: leagueId, name: String(d.name), inviteCode: String(d.inviteCode), owner: String(d.owner) },
-      members: members.docs.map(m => ({ userId: m.id, nickname: String(m.data().nickname) })),
-    };
-  } catch {
-    // メンバーから外れているなど
-    return { profile, league: null, members: [] };
+  return { profile, league: { id: MAIN_LEAGUE, name: '共通リーグ', inviteCode: '', owner: '' }, members: [] };
+}
+
+const transferKey = (uid: string) => 'keiba-life-transfer:' + uid;
+export const savedTransferCode = (uid: string) => window.localStorage.getItem(transferKey(uid)) ?? '';
+const hex = (bytes: Uint8Array) => Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+const transferPassword = (raw: string) => raw.trim().toLowerCase().replace(/[\s-]/g, '');
+async function transferEmail(password: string) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(password));
+  return hex(new Uint8Array(digest)).slice(0, 40) + '@transfer.keiba-life.invalid';
+}
+async function linkTransfer(game: Game, recovery = '') {
+  const { auth, au } = await firebase();
+  const user = auth.currentUser;
+  if (!user || context?.userId !== user.uid) throw new Error('先に名前を登録してください。');
+  const existing = savedTransferCode(user.uid);
+  if (existing) { await publishNow(game); return existing; }
+  const password = recovery ? transferPassword(recovery) : hex(crypto.getRandomValues(new Uint8Array(20)));
+  if (!/^[a-f0-9]{40}$/.test(password)) throw new Error('引き継ぎコードの形式を確認してください。');
+  const email = await transferEmail(password);
+  await publishNow(game);
+  if (user.email) {
+    if (!recovery || user.email !== email) throw new Error('このアカウントはコード発行済みです。保存したコードを入力してください。');
+    await au.reauthenticateWithCredential(user, au.EmailAuthProvider.credential(email,password));
+  } else {
+    await au.linkWithCredential(user, au.EmailAuthProvider.credential(email,password));
   }
+  const code = password.match(/.{5}/g)!.join('-');
+  window.localStorage.setItem(transferKey(user.uid), code);
+  return code;
 }
 
-const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-const makeCode = () => Array.from(crypto.getRandomValues(new Uint8Array(6)), b => CODE_CHARS[b % CODE_CHARS.length]).join('');
-export const normalizeCode = (code: string) => code.toUpperCase().replace(/[^A-Z0-9]/g, '');
+export const issueTransferCode = (game: Game) => linkTransfer(game);
 
-async function enter(leagueId: string, code: string, extra: (batch: import('firebase/firestore').WriteBatch) => void) {
-  const { db, fs } = await firebase();
-  if (!context) throw new Error('先にログインしてください。');
-  const me = context;
-  await leaveLeague().catch(() => undefined);
-  const batch = fs.writeBatch(db);
-  extra(batch);
-  batch.set(fs.doc(db, 'leagues', leagueId, 'members', me.userId), { nickname: me.nickname, code, joinedAt: Date.now() });
-  batch.set(fs.doc(db, 'users', me.userId), { nickname: me.nickname, leagueId, updatedAt: Date.now() });
-  await batch.commit();
-  me.leagueId = leagueId;
-}
-
-/** リーグを作る（招待コードを発行） */
-export async function createLeague(name: string) {
-  const { db, fs } = await firebase();
-  if (!context) throw new Error('先にログインしてください。');
-  const owner = context.userId;
-  const title = name.trim().slice(0, 30) || context.nickname + 'のリーグ';
-  let code = makeCode();
-  for (let i = 0; i < 5 && (await fs.getDoc(fs.doc(db, 'invites', code))).exists(); i++) code = makeCode();
-  const league = fs.doc(fs.collection(db, 'leagues'));
-  await enter(league.id, code, batch => {
-    batch.set(league, { name: title, inviteCode: code, owner, createdAt: Date.now() });
-    batch.set(fs.doc(db, 'invites', code), { leagueId: league.id });
-  });
-}
-
-/** 招待コードでリーグに入る */
-export async function joinLeague(input: string) {
-  const { db, fs } = await firebase();
-  const code = normalizeCode(input);
-  if (code.length !== 6) throw new Error('招待コードは6文字です。');
-  const invite = await fs.getDoc(fs.doc(db, 'invites', code));
-  const leagueId = invite.data()?.leagueId as string | undefined;
-  if (!leagueId) throw new Error('招待コードが見つかりません。');
-  await enter(leagueId, code, () => undefined);
-}
-
-export async function leaveLeague() {
-  const { db, fs } = await firebase();
-  if (!context?.leagueId) return;
-  const { userId, leagueId, nickname } = context;
-  const batch = fs.writeBatch(db);
-  batch.delete(fs.doc(db, 'leagues', leagueId, 'stables', userId));
-  batch.delete(fs.doc(db, 'leagues', leagueId, 'members', userId));
-  batch.set(fs.doc(db, 'users', userId), { nickname, leagueId: null, updatedAt: Date.now() });
-  await batch.commit();
-  context.leagueId = null;
+export async function restoreTransfer(raw: string) {
+  const password = transferPassword(raw);
+  if (!/^[a-f0-9]{40}$/.test(password)) throw new Error('引き継ぎコードの形式を確認してください。');
+  const email = await transferEmail(password);
+  const { auth, au, fs } = await firebase();
+  const appSdk = await import('firebase/app');
+  const staging = appSdk.initializeApp(config, 'keiba-transfer-' + crypto.randomUUID());
+  try {
+    const stagingAuth = au.initializeAuth(staging, { persistence: au.inMemoryPersistence });
+    const stagingDb = fs.getFirestore(staging);
+    if (process.env.NEXT_PUBLIC_FIREBASE_EMULATOR === 'true') {
+      au.connectAuthEmulator(stagingAuth, 'http://127.0.0.1:9099', { disableWarnings: true });
+      fs.connectFirestoreEmulator(stagingDb, '127.0.0.1', 8080);
+    }
+    const credential = await au.signInWithEmailAndPassword(stagingAuth, email, password);
+    const uid = credential.user.uid;
+    const [remote, owner] = await Promise.all([
+      fs.getDocFromServer(fs.doc(stagingDb, 'saves', uid)),
+      fs.getDocFromServer(fs.doc(stagingDb, 'users', uid)),
+    ]);
+    const text = remote.data()?.data;
+    const nickname = owner.data()?.nickname;
+    if (typeof text !== 'string' || typeof nickname !== 'string') throw new Error('引き継ぐセーブが見つかりません。');
+    const game = migrate(JSON.parse(text));
+    await au.signInWithEmailAndPassword(auth, email, password);
+    const profile = { userId: uid, nickname };
+    context = { ...profile, leagueId: MAIN_LEAGUE };
+    window.localStorage.setItem(SAVE_KEY, text);
+    window.localStorage.setItem(SAVE_KEY + '-owner', uid);
+    window.localStorage.setItem(transferKey(uid), password.match(/.{5}/g)!.join('-'));
+    return { profile, game };
+  } finally {
+    await appSdk.deleteApp(staging);
+  }
 }
 
 // ───────── 厩舎の公開・友だちの馬 ─────────
 export async function publishStable(game: Game) {
-  if (!context?.leagueId) return;
+  const progress = leagueProgress(game);
+  if (!context?.leagueId || !progress.eligible) return;
   const { db, fs } = await firebase();
   const { userId, nickname, leagueId } = context;
   await fs.setDoc(fs.doc(db, 'leagues', leagueId, 'stables', userId), {
-    nickname, silks: game.silks, horses: JSON.stringify(publicHorses(game)), summary: summarize(game), gameTime: game.time, updatedAt: Date.now(),
+    completedRaces: progress.races, currency: 'JPY', nickname, silks: game.silks, horses: JSON.stringify(publicHorses(game)), names: Object.fromEntries([...game.horses,...game.soldHorses.map(s=>s.horse)].map(h => ['id:' + h.id, h.name])), summary: summarize(game), gameTime: game.time, updatedAt: Date.now(),
   });
 }
 
@@ -186,13 +174,16 @@ export async function publishStable(game: Game) {
 export async function fetchStables(leagueId: string): Promise<StableSnapshot[]> {
   const { db, fs } = await firebase();
   const snap = await fs.getDocs(fs.collection(db, 'leagues', leagueId, 'stables'));
-  return snap.docs.map(d => {
+  return snap.docs.filter(d => Number(d.data().completedRaces) >= 3 && Number(d.data().gameTime) >= 6).map(d => {
     const v = d.data();
     let horses: Horse[] = [];
     try { horses = typeof v.horses === 'string' ? (JSON.parse(v.horses) as Horse[]) : []; } catch { horses = []; }
+    const multiplier = v.currency === 'JPY' ? 1 : YEN_PER_POINT;
+    if (multiplier !== 1) horses = horses.map(h => ({ ...h, earnings: (h.earnings ?? 0) * multiplier }));
+    const summary = (v.summary ?? { prize: 0, g1: 0, spent: 0, returned: 0, bestPayout: 0, strongest: [], hot: [] }) as Summary;
     return {
-      userId: d.id, nickname: String(v.nickname ?? 'ななし'), silks: v.silks, horses,
-      summary: (v.summary ?? { prize: 0, g1: 0, spent: 0, returned: 0, bestPayout: 0, strongest: [], hot: [] }) as Summary,
+      userId: d.id, nickname: String(v.nickname ?? 'ななし'), silks: v.silks, horses, names: v.names ? Object.fromEntries(Object.entries(v.names as Record<string,string>).map(([id,name])=>[id.slice(3),name])) : undefined,
+      summary: { ...summary, prize: summary.prize * multiplier, spent: summary.spent * multiplier, returned: summary.returned * multiplier, bestPayout: summary.bestPayout * multiplier },
       gameTime: Number(v.gameTime ?? 1), updatedAt: Number(v.updatedAt ?? 0),
     };
   });
@@ -204,9 +195,9 @@ export async function postResult(result: Result) {
   const { db, fs } = await firebase();
   const { userId, nickname, leagueId } = context;
   const batch = fs.writeBatch(db);
-  batch.set(fs.doc(fs.collection(db, 'leagues', leagueId, 'results')), { ...sharedResult(result, nickname), userId, createdAt: Date.now() });
+  batch.set(fs.doc(fs.collection(db, 'leagues', leagueId, 'results')), { ...sharedResult(result, nickname), currency: 'JPY', userId, createdAt: Date.now() });
   for (const p of friendPrizes(result)) {
-    batch.set(fs.doc(fs.collection(db, 'leagues', leagueId, 'prizes')), { ...p, fromUser: userId, fromNickname: nickname, claimed: false, createdAt: Date.now() });
+    batch.set(fs.doc(fs.collection(db, 'leagues', leagueId, 'prizes')), { ...p, currency: 'JPY', fromUser: userId, fromNickname: nickname, claimed: false, createdAt: Date.now() });
   }
   await batch.commit();
 }
@@ -215,7 +206,12 @@ export async function fetchFeed(leagueId: string, count = 30): Promise<SharedRes
   const { db, fs } = await firebase();
   const q = fs.query(fs.collection(db, 'leagues', leagueId, 'results'), fs.orderBy('createdAt', 'desc'), fs.limit(count));
   const snap = await fs.getDocs(q);
-  return snap.docs.map(d => ({ ...(d.data() as Omit<SharedResult, 'id'>), id: d.id }));
+  return snap.docs.map(d => {
+    const value = d.data() as Omit<SharedResult, 'id'> & { currency?: string };
+    const rate = value.currency === 'JPY' ? 1 : YEN_PER_POINT;
+    return { ...value, id: d.id, prize: value.prize * rate,
+      tickets: value.tickets.map(t => ({ ...t, stake: t.stake * rate, payout: t.payout * rate })) };
+  });
 }
 
 /** 友だちのレースで自分の馬が獲った賞金を受け取る（二重に受け取らないようトランザクションで claimed にする） */
@@ -237,7 +233,7 @@ export async function claimPrizes(): Promise<ReceivedPrize[]> {
     const v = d.data();
     received.push({
       toUser: userId, horseId: String(v.horseId), horseName: String(v.horseName), raceTitle: String(v.raceTitle),
-      rank: Number(v.rank), prize: Number(v.prize), fromNickname: String(v.fromNickname),
+      rank: Number(v.rank), prize: Number(v.prize) * (v.currency === 'JPY' ? 1 : YEN_PER_POINT), fromNickname: String(v.fromNickname),
     });
   }
   return received;
@@ -268,9 +264,10 @@ export function createSyncedStorage(userId: string, onError?: () => void): GameS
     pending = null;
     if (!game) return;
     try {
-      const { db, fs } = await firebase();
+      const { auth, db, fs } = await firebase();
+      if (auth.currentUser?.uid !== userId) return;
       await fs.setDoc(fs.doc(db, 'saves', userId), { data: cloudText(game), savedAt: new Date().toISOString() });
-      await publishStable(game);
+      if (context?.userId === userId) await publishStable(game);
     } catch {
       onError?.();
     }
@@ -280,7 +277,8 @@ export function createSyncedStorage(userId: string, onError?: () => void): GameS
   }
   return {
     async load() {
-      const localText = typeof window === 'undefined' ? null : window.localStorage.getItem(SAVE_KEY);
+      const owner = window.localStorage.getItem(SAVE_KEY + '-owner');
+      const localText = owner && owner !== userId ? null : window.localStorage.getItem(SAVE_KEY);
       try {
         const { db, fs } = await firebase();
         const remote = (await fs.getDoc(fs.doc(db, 'saves', userId))).data() as { data?: string } | undefined;
@@ -291,9 +289,10 @@ export function createSyncedStorage(userId: string, onError?: () => void): GameS
       } catch {
         // オフラインなどは端末のデータで続ける
       }
-      return local.load();
+      return owner && owner !== userId ? migrate(undefined) : local.load();
     },
     async save(game) {
+      window.localStorage.setItem(SAVE_KEY + '-owner', userId);
       await local.save(game);
       pending = game;
       clearTimeout(timer);

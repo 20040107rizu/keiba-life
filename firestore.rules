@@ -10,6 +10,19 @@ service cloud.firestore {
     function isMember(leagueId) {
       return signedIn() && exists(/databases/$(database)/documents/leagues/$(leagueId)/members/$(request.auth.uid));
     }
+    function mainParticipant() {
+      return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.leagueId == 'main';
+    }
+    function mainPublished(uid) {
+      return exists(/databases/$(database)/documents/leagues/main/stables/$(uid));
+    }
+    function canReadLeague(id) {
+      return id == 'main' ? mainParticipant() : isMember(id);
+    }
+    function canPostLeague(id) {
+      return id == 'main' ? mainParticipant() && mainPublished(request.auth.uid) : isMember(id);
+    }
     function nickname(n) { return n is string && n.size() >= 1 && n.size() <= 20; }
     function data() { return request.resource.data; }
 
@@ -40,9 +53,9 @@ service cloud.firestore {
     }
 
     match /leagues/{leagueId} {
-      allow get: if isMember(leagueId);
+      allow get: if canReadLeague(leagueId);
       allow list, update, delete: if false;
-      allow create: if signedIn()
+      allow create: if signedIn() && leagueId != 'main'
         && data().keys().hasOnly(['name', 'inviteCode', 'owner', 'createdAt'])
         && data().owner == request.auth.uid
         && data().name is string && data().name.size() >= 1 && data().name.size() <= 30
@@ -51,8 +64,8 @@ service cloud.firestore {
 
       // 参加：正しい招待コードを持っている本人だけ
       match /members/{uid} {
-        allow read: if isMember(leagueId);
-        allow create: if isMe(uid)
+        allow read: if canReadLeague(leagueId);
+        allow create: if isMe(uid) && leagueId != 'main'
           && data().keys().hasOnly(['nickname', 'code', 'joinedAt'])
           && nickname(data().nickname)
           && data().code is string
@@ -63,8 +76,11 @@ service cloud.firestore {
 
       // 厩舎の最新データ（友だちのレースに出走する馬・ランキング）
       match /stables/{uid} {
-        allow read: if isMember(leagueId);
-        allow create, update: if isMe(uid) && isMember(leagueId)
+        allow read: if canReadLeague(leagueId);
+        allow create, update: if isMe(uid) && canReadLeague(leagueId)
+          && (leagueId != 'main' || (data().completedRaces is int && data().completedRaces >= 3
+            && data().gameTime is int && data().gameTime >= 6
+            && data().nickname == get(/databases/$(database)/documents/users/$(uid)).data.nickname))
           && data().horses is string && data().horses.size() < 500000
           && nickname(data().nickname);
         allow delete: if isMe(uid);
@@ -72,8 +88,8 @@ service cloud.firestore {
 
       // 共有するレース結果・馬券（あとから書き換え不可）
       match /results/{resultId} {
-        allow read: if isMember(leagueId);
-        allow create: if isMember(leagueId)
+        allow read: if canReadLeague(leagueId);
+        allow create: if canPostLeague(leagueId)
           && data().userId == request.auth.uid
           && data().createdAt is number;
         allow update, delete: if false;
@@ -82,11 +98,13 @@ service cloud.firestore {
       // 友だちの馬が獲った賞金。送るのはレースを開催した人、受け取る（claimed=true にする）のは持ち主
       match /prizes/{prizeId} {
         allow read: if signedIn() && (resource.data.toUser == request.auth.uid || resource.data.fromUser == request.auth.uid);
-        allow create: if isMember(leagueId)
+        allow create: if canPostLeague(leagueId)
           && data().fromUser == request.auth.uid
           && data().toUser is string && data().toUser != request.auth.uid
-          && exists(/databases/$(database)/documents/leagues/$(leagueId)/members/$(data().toUser))
-          && data().prize is int && data().prize > 0 && data().prize <= 20000
+          && (leagueId == 'main' ? mainPublished(data().toUser)
+            : exists(/databases/$(database)/documents/leagues/$(leagueId)/members/$(data().toUser)))
+          && data().prize is int && data().prize > 0 && (('currency' in data() && data().currency == 'JPY' && data().prize <= 500000000)
+            || (!('currency' in data()) && data().prize <= 20000))
           && data().claimed == false;
         allow update: if signedIn()
           && resource.data.toUser == request.auth.uid

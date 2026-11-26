@@ -1,1 +1,29 @@
-{"name":"keiba-life","version":"1.0.0","private":true,"scripts":{"dev":"next dev","build":"next build","start":"next start"},"dependencies":{"firebase":"^13.4.0","lucide-react":"^0.468.0","next":"^15.5.0","react":"^19.0.0","react-dom":"^19.0.0"},"devDependencies":{"@tailwindcss/postcss":"^4.1","@types/node":"^22","@types/react":"^19","@types/react-dom":"^19","postcss":"^8.5","tailwindcss":"^4.1","typescript":"^5.8.0"}}
+{
+  "name": "keiba-life",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test": "tsc --module commonjs --target es2021 --esModuleInterop --skipLibCheck --outDir .next/unit-tests tests/economy.test.ts && node --test .next/unit-tests/tests/economy.test.js"
+  },
+  "dependencies": {
+    "firebase": "^13.4.0",
+    "lucide-react": "^0.468.0",
+    "next": "^15.5.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "three": "^0.180.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1",
+    "@types/node": "^22",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/three": "^0.180.0",
+    "postcss": "^8.5",
+    "tailwindcss": "^4.1",
+    "typescript": "^5.8.0"
+  }
+}

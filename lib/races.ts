@@ -1,3 +1,4 @@
+import { courseOf } from './course-data';
 // lib/races.ts
 // ─────────────────────────────────────────────
 // レース・競馬場の設定ファイル
@@ -8,23 +9,9 @@
 export const classes = ['新馬', '未勝利', '1勝クラス', '2勝クラス', '3勝クラス', 'オープン', 'G3', 'G2', 'G1'];
 
 export type Surface = '芝' | 'ダート';
-export type Race = { week: number; title: string; venue: string; distance: number; surface: Surface; level: number; age?: number };
+export type Race = { week: number; title: string; venue: string; distance: number; surface: Surface; level: number; age?: number; prize?: number; course?: '内' | '外' };
 
-/** 競馬場の特徴。straight=最後の直線の長さ(m)[芝, ダート]、slope=ゴール前の坂のきつさ(0〜1) */
-export type Venue = { straight: [number, number]; slope: number; turn: '右' | '左' };
-
-export const venues: Record<string, Venue> = {
-  東京: { straight: [525, 501], slope: 0.5, turn: '左' },
-  中山: { straight: [310, 308], slope: 1, turn: '右' },
-  阪神: { straight: [474, 352], slope: 0.8, turn: '右' },
-  京都: { straight: [404, 329], slope: 0, turn: '右' },
-  新潟: { straight: [659, 354], slope: 0, turn: '左' },
-  札幌: { straight: [266, 264], slope: 0, turn: '右' },
-  中京: { straight: [413, 411], slope: 0.8, turn: '左' },
-};
-
-const defaultVenue: Venue = { straight: [400, 350], slope: 0.3, turn: '右' };
-export const venueOf = (race: Race): Venue => venues[race.venue] ?? defaultVenue;
+export const venueOf = courseOf;
 
 /** 重賞（実在のレース名） */
 export const gradedRaces: Race[] = [
@@ -33,23 +20,23 @@ export const gradedRaces: Race[] = [
   { week: 6, title: '3歳未勝利', venue: '東京', distance: 1400, surface: 'ダート', level: 1, age: 3 },
   { week: 9, title: '春風特別', venue: '中山', distance: 1200, surface: 'ダート', level: 2 },
   { week: 12, title: '千里山特別', venue: '阪神', distance: 2000, surface: '芝', level: 3 },
-  { week: 15, title: '皐月賞', venue: '中山', distance: 2000, surface: '芝', level: 8, age: 3 },
+  { week: 15, title: '皐月賞', prize: 200_000_000, venue: '中山', distance: 2000, surface: '芝', level: 8, age: 3 },
   { week: 16, title: '春興ステークス', venue: '中山', distance: 1600, surface: '芝', level: 4 },
-  { week: 18, title: '天皇賞（春）', venue: '京都', distance: 3200, surface: '芝', level: 8 },
+  { week: 18, title: '天皇賞（春）', prize: 300_000_000, venue: '京都', distance: 3200, surface: '芝', level: 8 },
   { week: 20, title: 'メイステークス', venue: '東京', distance: 1800, surface: '芝', level: 5 },
   { week: 21, title: '平安ステークス', venue: '京都', distance: 1900, surface: 'ダート', level: 6 },
-  { week: 22, title: '日本ダービー', venue: '東京', distance: 2400, surface: '芝', level: 8, age: 3 },
+  { week: 22, title: '日本ダービー', prize: 300_000_000, venue: '東京', distance: 2400, surface: '芝', level: 8, age: 3 },
   { week: 23, title: 'エプソムカップ', venue: '東京', distance: 1800, surface: '芝', level: 6 },
   { week: 25, title: '目黒記念', venue: '東京', distance: 2500, surface: '芝', level: 7 },
-  { week: 26, title: '宝塚記念', venue: '阪神', distance: 2200, surface: '芝', level: 8 },
+  { week: 26, title: '宝塚記念', prize: 300_000_000, venue: '阪神', distance: 2200, surface: '芝', level: 8 },
   { week: 30, title: 'メイクデビュー新潟', venue: '新潟', distance: 1800, surface: '芝', level: 0 },
   { week: 33, title: '札幌記念', venue: '札幌', distance: 2000, surface: '芝', level: 7 },
   { week: 34, title: '夏の未勝利戦', venue: '札幌', distance: 1700, surface: 'ダート', level: 1 },
   { week: 38, title: '神戸新聞杯', venue: '阪神', distance: 2400, surface: '芝', level: 7, age: 3 },
-  { week: 42, title: '菊花賞', venue: '京都', distance: 3000, surface: '芝', level: 8, age: 3 },
-  { week: 43, title: '天皇賞（秋）', venue: '東京', distance: 2000, surface: '芝', level: 8 },
-  { week: 48, title: 'チャンピオンズカップ', venue: '中京', distance: 1800, surface: 'ダート', level: 8 },
-  { week: 52, title: '有馬記念', venue: '中山', distance: 2500, surface: '芝', level: 8 },
+  { week: 42, title: '菊花賞', prize: 200_000_000, venue: '京都', distance: 3000, surface: '芝', level: 8, age: 3 },
+  { week: 43, title: '天皇賞（秋）', prize: 300_000_000, venue: '東京', distance: 2000, surface: '芝', level: 8 },
+  { week: 48, title: 'チャンピオンズカップ', prize: 150_000_000, venue: '中京', distance: 1800, surface: 'ダート', level: 8 },
+  { week: 52, title: '有馬記念', prize: 500_000_000, venue: '中山', distance: 2500, surface: '芝', level: 8 },
 ];
 
 /** 条件戦（架空・汎用の名前）。クラスを上げやすくするため各クラス年3〜5回 */
