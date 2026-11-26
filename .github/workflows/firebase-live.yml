@@ -140,16 +140,23 @@ jobs:
                   and (nickname := doc.get("fields", {}).get("nickname", {}).get("stringValue"))
                   and hashlib.sha256((salt + unicodedata.normalize("NFKC", nickname).strip()).encode()).hexdigest() == digest
               ]
-              if len(matches) != 1:
-                  raise SystemExit(f"Matching profiles: {len(matches)}. No update.")
-          
-              path = BASE + "/saves/" + matches[0].rsplit("/", 1)[1]
-              doc = call(path)
-              save = json.loads(doc["fields"]["data"]["stringValue"])
-              game = save.get("game", {})
-              if save.get("version", 0) < 4 or type(game.get("points")) is not int or game["points"] != 0:
-                  raise SystemExit("円建てのセーブか残高0円の条件を満たしません。変更していません。")
-          
+              eligible = []
+              for match in matches:
+                  path = BASE + "/saves/" + match.rsplit("/", 1)[1]
+                  try:
+                      doc = call(path)
+                  except HTTPError as error:
+                      if error.code != 404:
+                          raise
+                      continue
+                  save = json.loads(doc["fields"]["data"]["stringValue"])
+                  game = save.get("game", {})
+                  if save.get("version", 0) >= 4 and type(game.get("points")) is int and game["points"] == 0:
+                      eligible.append((path, doc, save, game))
+              if len(eligible) != 1:
+                  raise SystemExit(f"Matching zero-balance saves: {len(eligible)}. No update.")
+              path, doc, save, game = eligible[0]
+
               stamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
               game["points"] = 1_000_000_000
               save["savedAt"] = stamp
