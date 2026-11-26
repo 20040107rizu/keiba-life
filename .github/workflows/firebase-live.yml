@@ -1,0 +1,72 @@
+name: Publish to Firebase
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: firebase-keiba-life-live
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: firebase-production
+      url: https://keiba-life.web.app
+    env:
+      FIREBASE_PROJECT: keiba-life
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Read public Firebase web configuration
+        run: |
+          curl -fsS --retry 3 https://keiba-life.web.app/__/firebase/init.json -o "$RUNNER_TEMP/firebase-web.json"
+          node --input-type=module <<'JS'
+          import { appendFileSync, readFileSync } from 'node:fs';
+          const config = JSON.parse(readFileSync(process.env.RUNNER_TEMP + '/firebase-web.json','utf8'));
+          if (config.projectId !== process.env.FIREBASE_PROJECT) throw new Error('Wrong Firebase web project');
+          for (const [key, name] of Object.entries({ API_KEY:'apiKey', AUTH_DOMAIN:'authDomain', PROJECT_ID:'projectId', APP_ID:'appId', STORAGE_BUCKET:'storageBucket', MESSAGING_SENDER_ID:'messagingSenderId' })) {
+            if (typeof config[name] !== 'string' || !config[name] || /[\r\n]/.test(config[name])) throw new Error('Missing Firebase setting: ' + name);
+            appendFileSync(process.env.GITHUB_ENV, 'NEXT_PUBLIC_FIREBASE_' + key + '=' + config[name] + '\n');
+          }
+          JS
+      - run: npm run build
+      - name: Get Firebase project number
+        id: project
+        run: |
+          config="$RUNNER_TEMP/firebase-web.json"
+          number=$(node -e 'console.log(require(process.argv[1]).messagingSenderId)' "$config")
+          [[ "$number" =~ ^[0-9]+$ ]]
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/${{ steps.project.outputs.number }}/locations/global/workloadIdentityPools/keiba-github/providers/github
+          service_account: keiba-github-deploy@keiba-life.iam.gserviceaccount.com
+      - name: Publish Hosting and Firestore rules
+        run: npx --yes firebase-tools@15.37.0 deploy --project "$FIREBASE_PROJECT" --only hosting,firestore:rules --non-interactive
+      - name: Verify live application bundle
+        run: |
+          grep -oE '/_next/static/chunks/app/page-[a-f0-9]+\.js' out/index.html | head -1 > "$RUNNER_TEMP/page-path"
+          bundle=$(cat "$RUNNER_TEMP/page-path")
+          test -n "$bundle"
+          for attempt in 1 2 3 4 5 6; do
+            if curl -fsS -H 'Cache-Control: no-cache' "https://keiba-life.web.app/?verify=$GITHUB_SHA-$attempt" -o "$RUNNER_TEMP/live.html" &&
+               grep -Fq "$bundle" "$RUNNER_TEMP/live.html" &&
+               curl -fsS "https://keiba-life.web.app$bundle" -o "$RUNNER_TEMP/live.js" &&
+               cmp -s "out$bundle" "$RUNNER_TEMP/live.js"; then exit 0; fi
+            sleep 10
+          done
+          echo 'The live site did not return the new application bundle.' >&2
+          exit 1
